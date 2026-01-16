@@ -52,25 +52,64 @@ export default {
 /**
  * Handles chat API requests
  */
-async function handleChatRequest(
+const JSON_HEADERS = { "content-type": "application/json" } as const;
+const VALID_ROLES = new Set<ChatMessage["role"]>(["system", "user", "assistant"]);
+
+function isChatMessage(value: unknown): value is ChatMessage {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const { role, content } = value as Partial<ChatMessage>;
+  return (
+    typeof role === "string" &&
+    VALID_ROLES.has(role as ChatMessage["role"]) &&
+    typeof content === "string"
+  );
+}
+
+export async function handleChatRequest(
   request: Request,
   env: Env,
 ): Promise<Response> {
   try {
-    // Parse JSON request body
-    const { messages = [] } = (await request.json()) as {
-      messages: ChatMessage[];
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON body" }),
+        { status: 400, headers: JSON_HEADERS },
+      );
+    }
+
+    const { messages } = (body ?? {}) as {
+      messages?: unknown;
     };
 
+    if (!Array.isArray(messages) || !messages.every(isChatMessage)) {
+      return new Response(
+        JSON.stringify({
+          error: "Invalid request: messages must be an array of chat messages",
+        }),
+        { status: 400, headers: JSON_HEADERS },
+      );
+    }
+
+    const normalizedMessages = messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
     // Add system prompt if not present
-    if (!messages.some((msg) => msg.role === "system")) {
-      messages.unshift({ role: "system", content: SYSTEM_PROMPT });
+    if (!normalizedMessages.some((msg) => msg.role === "system")) {
+      normalizedMessages.unshift({ role: "system", content: SYSTEM_PROMPT });
     }
 
     const response = await env.AI.run(
       MODEL_ID,
       {
-        messages,
+        messages: normalizedMessages,
         max_tokens: 1024,
       },
       {
@@ -90,10 +129,8 @@ async function handleChatRequest(
     console.error("Error processing chat request:", error);
     return new Response(
       JSON.stringify({ error: "Failed to process request" }),
-      {
-        status: 500,
-        headers: { "content-type": "application/json" },
-      },
+      { status: 500, headers: JSON_HEADERS },
     );
   }
 }
+
