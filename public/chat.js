@@ -10,6 +10,10 @@ const userInput = document.getElementById("user-input");
 const sendButton = document.getElementById("send-button");
 const typingIndicator = document.getElementById("typing-indicator");
 
+// Configuration
+const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
+const REQUEST_TIMEOUT = 60000; // Request timeout in milliseconds (60 seconds)
+
 // Chat state
 let chatHistory = [
   {
@@ -46,6 +50,15 @@ async function sendMessage() {
   // Don't send empty messages
   if (message === "" || isProcessing) return;
 
+  // Validate message length
+  if (message.length > MAX_MESSAGE_LENGTH) {
+    addMessageToChat(
+      "assistant",
+      `Sorry, your message is too long. Please keep it under ${MAX_MESSAGE_LENGTH} characters. (Current: ${message.length})`,
+    );
+    return;
+  }
+
   // Disable input while processing
   isProcessing = true;
   userInput.disabled = true;
@@ -68,70 +81,121 @@ async function sendMessage() {
     // Create new assistant response element
     const assistantMessageEl = document.createElement("div");
     assistantMessageEl.className = "message assistant-message";
-    assistantMessageEl.innerHTML = "<p></p>";
+    const assistantParagraph = document.createElement("p");
+    assistantMessageEl.appendChild(assistantParagraph);
     chatMessages.appendChild(assistantMessageEl);
 
     // Scroll to bottom
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
-    // Send request to API
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        messages: chatHistory,
-      }),
-    });
+    // Set up timeout handling
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), REQUEST_TIMEOUT);
 
-    // Handle errors
-    if (!response.ok) {
-      throw new Error("Failed to get response");
-    }
+    try {
+      // Send request to API
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messages: chatHistory,
+        }),
+        signal: abortController.signal,
+      });
 
-    // Process streaming response
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let responseText = "";
+      // Clear timeout if request completes
+      clearTimeout(timeoutId);
 
-    while (true) {
-      const { done, value } = await reader.read();
-
-      if (done) {
-        break;
+      // Handle errors
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server error: ${response.status}`);
       }
 
-      // Decode chunk
-      const chunk = decoder.decode(value, { stream: true });
+      // Process streaming response
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let responseText = "";
+      let buffer = ""; // Buffer for incomplete JSON lines
 
-      // Process SSE format
-      const lines = chunk.split("\n");
-      for (const line of lines) {
-        try {
-          const jsonData = JSON.parse(line);
-          if (jsonData.response) {
-            // Append new content to existing text
-            responseText += jsonData.response;
-            assistantMessageEl.querySelector("p").textContent = responseText;
+      while (true) {
+        const { done, value } = await reader.read();
 
-            // Scroll to bottom
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+        if (done) {
+          break;
+        }
+
+        // Decode chunk
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        // Process complete lines (split by newline)
+        const lines = buffer.split("\n");
+        // Keep the last incomplete line in the buffer
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          // Skip empty lines
+          if (trimmedLine === "") continue;
+
+          try {
+            const jsonData = JSON.parse(trimmedLine);
+            if (jsonData.response) {
+              // Append new content to existing text
+              responseText += jsonData.response;
+              assistantParagraph.textContent = responseText;
+
+              // Scroll to bottom
+              chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+          } catch (e) {
+            // Only log non-empty parsing errors
+            if (trimmedLine) {
+              console.error("Error parsing JSON line:", trimmedLine, e);
+            }
           }
-        } catch (e) {
-          console.error("Error parsing JSON:", e);
         }
       }
-    }
 
-    // Add completed response to chat history
-    chatHistory.push({ role: "assistant", content: responseText });
+      // Process any remaining buffered content
+      if (buffer.trim()) {
+        try {
+          const jsonData = JSON.parse(buffer.trim());
+          if (jsonData.response) {
+            responseText += jsonData.response;
+            assistantParagraph.textContent = responseText;
+          }
+        } catch (e) {
+          console.error("Error parsing final buffered JSON:", buffer, e);
+        }
+      }
+
+      // Add completed response to chat history
+      if (responseText) {
+        chatHistory.push({ role: "assistant", content: responseText });
+      } else {
+        // Handle case where no response was received
+        throw new Error("No response received from server");
+      }
+    } catch (innerError) {
+      // Clear timeout on error
+      clearTimeout(timeoutId);
+      throw innerError;
+    }
   } catch (error) {
     console.error("Error:", error);
-    addMessageToChat(
-      "assistant",
-      "Sorry, there was an error processing your request.",
-    );
+    let errorMessage = "Sorry, there was an error processing your request.";
+
+    if (error.name === "AbortError") {
+      errorMessage = "Request timed out. Please try again.";
+    } else if (error.message) {
+      errorMessage = `Error: ${error.message}`;
+    }
+
+    addMessageToChat("assistant", errorMessage);
   } finally {
     // Hide typing indicator
     typingIndicator.classList.remove("visible");
@@ -150,7 +214,9 @@ async function sendMessage() {
 function addMessageToChat(role, content) {
   const messageEl = document.createElement("div");
   messageEl.className = `message ${role}-message`;
-  messageEl.innerHTML = `<p>${content}</p>`;
+  const paragraph = document.createElement("p");
+  paragraph.textContent = content;
+  messageEl.appendChild(paragraph);
   chatMessages.appendChild(messageEl);
 
   // Scroll to bottom
