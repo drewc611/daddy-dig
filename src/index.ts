@@ -48,6 +48,14 @@ export default {
       return env.ASSETS.fetch(request);
     }
 
+    if (url.pathname === "/api/config") {
+      if (request.method === "GET") {
+        return handleConfigRequest(env);
+      }
+
+      return new Response("Method not allowed", { status: 405 });
+    }
+
     // API Routes
     if (url.pathname === "/api/chat") {
       // Handle POST requests for chat
@@ -73,6 +81,39 @@ const JSON_HEADERS = { "content-type": "application/json" } as const;
  * Set of valid chat message roles
  */
 const VALID_ROLES = new Set<ChatMessage["role"]>(["system", "user", "assistant"]);
+
+function parseModelAllowlist(
+  allowlistValue: string | undefined,
+  defaultModel: string,
+): string[] {
+  const models = (allowlistValue ?? "")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+  if (models.length === 0) {
+    return [defaultModel];
+  }
+
+  if (!models.includes(defaultModel)) {
+    models.unshift(defaultModel);
+  }
+
+  return Array.from(new Set(models));
+}
+
+async function handleConfigRequest(env: Env): Promise<Response> {
+  const MODEL_ID = env.MODEL_ID || DEFAULT_MODEL_ID;
+  const models = parseModelAllowlist(env.MODEL_ALLOWLIST, MODEL_ID);
+
+  return new Response(
+    JSON.stringify({
+      defaultModel: MODEL_ID,
+      models,
+    }),
+    { headers: JSON_HEADERS },
+  );
+}
 
 /**
  * Type guard to validate if a value is a valid ChatMessage
@@ -159,6 +200,7 @@ export async function handleChatRequest(
 ): Promise<Response> {
   // Get configuration from environment variables or use defaults
   const MODEL_ID = env.MODEL_ID || DEFAULT_MODEL_ID;
+  const MODEL_ALLOWLIST = parseModelAllowlist(env.MODEL_ALLOWLIST, MODEL_ID);
   const SYSTEM_PROMPT = env.SYSTEM_PROMPT || DEFAULT_SYSTEM_PROMPT;
   const MAX_MESSAGE_LENGTH = parseInt(
     env.MAX_MESSAGE_LENGTH || String(DEFAULT_MAX_MESSAGE_LENGTH),
@@ -202,8 +244,9 @@ export async function handleChatRequest(
       );
     }
 
-    const { messages } = (body ?? {}) as {
+    const { messages, model } = (body ?? {}) as {
       messages?: unknown;
+      model?: unknown;
     };
 
     if (!Array.isArray(messages) || !messages.every(isChatMessage)) {
@@ -237,6 +280,19 @@ export async function handleChatRequest(
       }
     }
 
+    const requestedModel = typeof model === "string" ? model.trim() : undefined;
+    if (requestedModel && !MODEL_ALLOWLIST.includes(requestedModel)) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "Invalid model selection. Please choose a model from the allowed list.",
+        }),
+        { status: 400, headers: JSON_HEADERS },
+      );
+    }
+
+    const modelToUse = requestedModel || MODEL_ID;
+
     const normalizedMessages = messages.map((message) => ({
       role: message.role,
       content: message.content,
@@ -248,7 +304,7 @@ export async function handleChatRequest(
     }
 
     const response = await env.AI.run(
-      MODEL_ID,
+      modelToUse,
       {
         messages: normalizedMessages,
         max_tokens: MAX_TOKENS,
@@ -274,4 +330,3 @@ export async function handleChatRequest(
     );
   }
 }
-

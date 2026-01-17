@@ -121,7 +121,16 @@ The frontend is a simple HTML/CSS/JavaScript application that:
 
 ### Changing the Model
 
-To use a different AI model, update the `MODEL_ID` constant in `src/index.ts`. You can find available models in the [Cloudflare Workers AI documentation](https://developers.cloudflare.com/workers-ai/models/).
+To use a different AI model, update the `MODEL_ID` variable in `wrangler.jsonc` (or set it as a Worker environment variable). You can find available models in the [Cloudflare Workers AI documentation](https://developers.cloudflare.com/workers-ai/models/).
+
+To allow users to upgrade or switch models from the UI:
+
+1. Set a comma-separated allowlist in `MODEL_ALLOWLIST`, for example:
+   ```
+   MODEL_ALLOWLIST="@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/meta/llama-3.1-70b-instruct"
+   ```
+2. Deploy the Worker. The UI will fetch `/api/config` and populate the model picker with the allowlisted models.
+3. Select the desired model in the UI before sending messages.
 
 ### Using AI Gateway
 
