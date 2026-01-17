@@ -26,7 +26,7 @@ This template demonstrates how to build an AI-powered chat interface using Cloud
 - 🔎 Built-in Observability logging
 <!-- dash-content-end -->
 
-## Getting Started
+## Directions (Start-to-Finish)
 
 ### Prerequisites
 
@@ -34,7 +34,7 @@ This template demonstrates how to build an AI-powered chat interface using Cloud
 - [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
 - A Cloudflare account with Workers AI access
 
-### Installation
+### Installation (one-time setup)
 
 1. Clone this repository:
 
@@ -54,7 +54,15 @@ This template demonstrates how to build an AI-powered chat interface using Cloud
    npm run cf-typegen
    ```
 
-### Development
+### Configure the system
+
+1. Open `wrangler.jsonc` and confirm:
+   - `MODEL_ID` is set to the model you want.
+   - Any environment variables you need are defined for dev and production.
+2. (Optional) Enable the model switcher by setting `MODEL_ALLOWLIST` to a comma-separated list of models.
+3. (Optional) Update the system prompt in `src/index.ts` to define the assistant’s behavior.
+
+### Development (local run)
 
 Start a local development server:
 
@@ -66,7 +74,7 @@ This will start a local server at http://localhost:8787.
 
 Note: Using Workers AI accesses your Cloudflare account even during local development, which will incur usage charges.
 
-### Deployment
+### Deployment (go live)
 
 Deploy to Cloudflare Workers:
 
@@ -74,7 +82,7 @@ Deploy to Cloudflare Workers:
 npm run deploy
 ```
 
-### Monitor
+### Monitor (operations)
 
 View real-time logs associated with any deployed Worker:
 
@@ -99,6 +107,22 @@ npm wrangler tail
 ```
 
 ## How It Works
+
+### System Architecture (What We Bought & How It Fits Together)
+
+This system is a complete chat application stack that includes:
+
+1. **Frontend UI** (browser): A responsive chat interface served from `public/` that captures user input and renders streaming responses.
+2. **API/Worker** (Cloudflare Workers): A serverless backend in `src/index.ts` that receives chat messages and streams responses via SSE.
+3. **LLM Provider** (Workers AI): The model runtime accessed through the Workers AI binding, configured in `wrangler.jsonc`.
+4. **Optional AI Gateway**: Adds caching, rate limiting, and analytics when enabled in the Worker.
+
+**Data flow**
+
+1. User sends a message in the browser UI.
+2. The UI POSTs to `/api/chat`.
+3. The Worker forwards the request to Workers AI and streams tokens back using SSE.
+4. The UI renders the streaming response in real time.
 
 ### Backend
 
