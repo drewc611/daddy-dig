@@ -17,16 +17,19 @@ const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
 const REQUEST_TIMEOUT = 60000; // Request timeout in milliseconds (60 seconds)
 
 // Chat state
+const initialAssistantMessage =
+  "Hi! I'm the daddy, powered by Cloudflare Workers AI. How can I help you today?";
+
 let chatHistory = [
   {
     role: "assistant",
-    content:
-      "Hello! I'm an LLM chat app powered by Cloudflare Workers AI. How can I help you today?",
+    content: initialAssistantMessage,
   },
 ];
 let isProcessing = false;
 
 loadModelConfig();
+addMessageToChat("assistant", initialAssistantMessage);
 
 // Auto-resize textarea as user types
 userInput.addEventListener("input", function () {
@@ -134,10 +137,8 @@ async function sendMessage() {
 
   try {
     // Create new assistant response element
-    const assistantMessageEl = document.createElement("div");
-    assistantMessageEl.className = "message assistant-message";
-    const assistantParagraph = document.createElement("p");
-    assistantMessageEl.appendChild(assistantParagraph);
+    const assistantMessageEl = createMessageElement("assistant", "");
+    const assistantParagraph = assistantMessageEl.querySelector("p");
     chatMessages.appendChild(assistantMessageEl);
 
     // Scroll to bottom
@@ -272,13 +273,37 @@ async function sendMessage() {
  * Helper function to add message to chat
  */
 function addMessageToChat(role, content) {
-  const messageEl = document.createElement("div");
-  messageEl.className = `message ${role}-message`;
-  const paragraph = document.createElement("p");
-  paragraph.textContent = content;
-  messageEl.appendChild(paragraph);
+  const messageEl = createMessageElement(role, content);
   chatMessages.appendChild(messageEl);
 
   // Scroll to bottom
   chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function createMessageElement(role, content) {
+  const messageEl = document.createElement("div");
+  messageEl.className = `message ${role}-message`;
+
+  const header = document.createElement("div");
+  header.className = "message-header";
+
+  const timestamp = document.createElement("span");
+  timestamp.className = "message-timestamp";
+  timestamp.textContent = formatTimestamp(new Date());
+
+  header.appendChild(timestamp);
+  messageEl.appendChild(header);
+
+  const paragraph = document.createElement("p");
+  paragraph.textContent = content;
+  messageEl.appendChild(paragraph);
+
+  return messageEl;
+}
+
+function formatTimestamp(date) {
+  return date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
