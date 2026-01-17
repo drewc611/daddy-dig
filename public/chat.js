@@ -9,6 +9,8 @@ const chatMessages = document.getElementById("chat-messages");
 const userInput = document.getElementById("user-input");
 const sendButton = document.getElementById("send-button");
 const typingIndicator = document.getElementById("typing-indicator");
+const modelSelect = document.getElementById("model-select");
+const modelStatus = document.getElementById("model-status");
 
 // Configuration
 const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
@@ -23,6 +25,8 @@ let chatHistory = [
   },
 ];
 let isProcessing = false;
+
+loadModelConfig();
 
 // Auto-resize textarea as user types
 userInput.addEventListener("input", function () {
@@ -40,6 +44,57 @@ userInput.addEventListener("keydown", function (e) {
 
 // Send button click handler
 sendButton.addEventListener("click", sendMessage);
+
+if (modelSelect) {
+  modelSelect.addEventListener("change", () => {
+    if (modelStatus) {
+      modelStatus.textContent = `Using ${modelSelect.value}`;
+    }
+  });
+}
+
+async function loadModelConfig() {
+  if (!modelSelect || !modelStatus) return;
+
+  try {
+    const response = await fetch("/api/config");
+    if (!response.ok) {
+      throw new Error(`Config request failed: ${response.status}`);
+    }
+
+    const config = await response.json();
+    const defaultModel =
+      typeof config.defaultModel === "string" ? config.defaultModel : "";
+    const models = Array.isArray(config.models)
+      ? config.models.filter((model) => typeof model === "string")
+      : [];
+
+    const availableModels = models.length > 0 ? models : [defaultModel];
+
+    modelSelect.innerHTML = "";
+    for (const model of availableModels) {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = model;
+      modelSelect.appendChild(option);
+    }
+
+    if (defaultModel) {
+      modelSelect.value = defaultModel;
+      modelStatus.textContent = `Using ${defaultModel}`;
+    } else if (availableModels.length > 0) {
+      modelStatus.textContent = `Using ${availableModels[0]}`;
+    } else {
+      modelStatus.textContent = "No models available";
+    }
+
+    modelSelect.disabled = availableModels.length === 0;
+  } catch (error) {
+    console.error("Failed to load model config:", error);
+    modelSelect.disabled = true;
+    modelStatus.textContent = "Model list unavailable";
+  }
+}
 
 /**
  * Sends a message to the chat API and processes the response
@@ -94,14 +149,19 @@ async function sendMessage() {
 
     try {
       // Send request to API
+      const payload = {
+        messages: chatHistory,
+      };
+      if (modelSelect && modelSelect.value) {
+        payload.model = modelSelect.value;
+      }
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          messages: chatHistory,
-        }),
+        body: JSON.stringify(payload),
         signal: abortController.signal,
       });
 

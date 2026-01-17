@@ -17,6 +17,7 @@ export interface Env {
    * Configuration variables
    */
   MODEL_ID?: string;
+  MODEL_ALLOWLIST?: string;
   SYSTEM_PROMPT?: string;
   MAX_MESSAGE_LENGTH?: string;
   MAX_MESSAGES?: string;

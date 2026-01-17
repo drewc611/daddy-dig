@@ -87,6 +87,34 @@
         background-color: white;
       }
 
+      .chat-controls {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 0.75rem;
+        border-top: 1px solid var(--border-color);
+        background-color: white;
+        font-size: 0.9rem;
+      }
+
+      .chat-controls label {
+        color: var(--text-light);
+      }
+
+      #model-select {
+        padding: 0.4rem 0.6rem;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        background-color: white;
+        font-size: 0.9rem;
+      }
+
+      .model-status {
+        margin-left: auto;
+        color: var(--text-light);
+        font-size: 0.8rem;
+      }
+
       #user-input {
         flex: 1;
         padding: 0.75rem;
@@ -154,6 +182,12 @@
 
       <div class="typing-indicator" id="typing-indicator">
         AI is thinking...
+      </div>
+
+      <div class="chat-controls">
+        <label for="model-select">Model</label>
+        <select id="model-select" disabled></select>
+        <span class="model-status" id="model-status">Loading models…</span>
       </div>
 
       <div class="message-input">
