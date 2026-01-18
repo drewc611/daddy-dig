@@ -168,6 +168,36 @@ function applySecurityHeaders(
   });
 }
 
+async function parseJsonBodyWithLimit(
+  request: Request,
+  maxBytes: number,
+): Promise<{ data: unknown } | { error: Response }> {
+  const bodyBuffer = await request.arrayBuffer();
+
+  if (bodyBuffer.byteLength > maxBytes) {
+    return {
+      error: new Response(
+        JSON.stringify({
+          error: `Request body too large: maximum ${maxBytes} bytes allowed`,
+        }),
+        { status: 413, headers: JSON_HEADERS },
+      ),
+    };
+  }
+
+  try {
+    const text = new TextDecoder().decode(bodyBuffer);
+    return { data: JSON.parse(text) };
+  } catch {
+    return {
+      error: new Response(
+        JSON.stringify({ error: "Invalid JSON body" }),
+        { status: 400, headers: JSON_HEADERS },
+      ),
+    };
+  }
+}
+
 async function handleConfigRequest(env: Env): Promise<Response> {
   const MODEL_ID = env.MODEL_ID || DEFAULT_MODEL_ID;
   const models = parseModelAllowlist(env.MODEL_ALLOWLIST, MODEL_ID);
@@ -344,17 +374,12 @@ export async function handleChatRequest(
       );
     }
 
-    try {
-      body = await request.json();
-    } catch {
-      return applySecurityHeaders(
-        new Response(
-          JSON.stringify({ error: "Invalid JSON body" }),
-          { status: 400, headers: JSON_HEADERS },
-        ),
-        { cacheControl: "no-store" },
-      );
+    const parsedBody = await parseJsonBodyWithLimit(request, MAX_BODY_BYTES);
+    if ("error" in parsedBody) {
+      return applySecurityHeaders(parsedBody.error, { cacheControl: "no-store" });
     }
+
+    body = parsedBody.data;
 
     const { messages, model } = (body ?? {}) as {
       messages?: unknown;
