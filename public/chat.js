@@ -11,6 +11,7 @@ const sendButton = document.getElementById("send-button");
 const typingIndicator = document.getElementById("typing-indicator");
 const modelSelect = document.getElementById("model-select");
 const modelStatus = document.getElementById("model-status");
+const contextStatus = document.getElementById("context-status");
 
 // Configuration
 const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
@@ -29,6 +30,7 @@ let chatHistory = [
 let isProcessing = false;
 
 loadModelConfig();
+updateContextStatus();
 addMessageToChat("assistant", initialAssistantMessage);
 
 // Auto-resize textarea as user types
@@ -152,6 +154,7 @@ async function sendMessage() {
       // Send request to API
       const payload = {
         messages: chatHistory,
+        clientContext: getClientContext(),
       };
       if (modelSelect && modelSelect.value) {
         payload.model = modelSelect.value;
@@ -306,4 +309,24 @@ function formatTimestamp(date) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function getClientContext() {
+  const timeZone =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "Unknown";
+  const locale = navigator.language || "Unknown";
+
+  return {
+    currentTimeIso: new Date().toISOString(),
+    timeZone,
+    locale,
+    userAgent: navigator.userAgent,
+  };
+}
+
+function updateContextStatus() {
+  if (!contextStatus) return;
+
+  const context = getClientContext();
+  contextStatus.textContent = `Local time synced (${context.timeZone})`;
 }
