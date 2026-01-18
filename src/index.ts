@@ -19,7 +19,7 @@ const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const DEFAULT_RATE_LIMIT_REQUESTS = 20; // 20 requests
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000; // per 60 seconds
-const MAX_CONTEXT_FIELD_LENGTH = 300;
+export const MAX_CONTEXT_FIELD_LENGTH = 300;
 
 // Simple in-memory rate limiter (resets on Worker restart)
 // For production, consider using Durable Objects or Rate Limiting API
@@ -104,7 +104,7 @@ const HTML_CONTENT_SECURITY_POLICY =
  */
 const VALID_ROLES = new Set<ChatMessage["role"]>(["system", "user", "assistant"]);
 
-function sanitizeContextValue(value: unknown): string | undefined {
+export function sanitizeContextValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -115,7 +115,7 @@ function sanitizeContextValue(value: unknown): string | undefined {
   return trimmed.slice(0, MAX_CONTEXT_FIELD_LENGTH);
 }
 
-function normalizeClientContext(value: unknown): ClientContext | undefined {
+export function normalizeClientContext(value: unknown): ClientContext | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
@@ -144,7 +144,7 @@ function normalizeClientContext(value: unknown): ClientContext | undefined {
   };
 }
 
-function buildContextualSystemPrompt(
+export function buildContextualSystemPrompt(
   basePrompt: string,
   clientContext?: ClientContext,
 ): string {
@@ -176,7 +176,7 @@ function buildContextualSystemPrompt(
   return `${basePrompt}\n\nContext:\n- ${contextLines.join("\n- ")}`;
 }
 
-function parseModelAllowlist(
+export function parseModelAllowlist(
   allowlistValue: string | undefined,
   defaultModel: string,
 ): string[] {
@@ -196,7 +196,7 @@ function parseModelAllowlist(
   return Array.from(new Set(models));
 }
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
+export function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return fallback;
@@ -204,7 +204,7 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
-function applySecurityHeaders(
+export function applySecurityHeaders(
   response: Response,
   options: { isHtml?: boolean; cacheControl?: string } = {},
 ): Response {
@@ -229,7 +229,7 @@ function applySecurityHeaders(
   });
 }
 
-async function parseJsonBodyWithLimit(
+export async function parseJsonBodyWithLimit(
   request: Request,
   maxBytes: number,
 ): Promise<{ data: unknown } | { error: Response }> {
@@ -265,7 +265,7 @@ async function parseJsonBodyWithLimit(
  * @param value - The value to check
  * @returns True if the value is a valid ChatMessage, false otherwise
  */
-function isChatMessage(value: unknown): value is ChatMessage {
+export function isChatMessage(value: unknown): value is ChatMessage {
   if (typeof value !== "object" || value === null) {
     return false;
   }
@@ -289,7 +289,7 @@ function isChatMessage(value: unknown): value is ChatMessage {
  * @param windowMs - Time window in milliseconds
  * @returns True if rate limit is exceeded, false otherwise
  */
-function checkRateLimit(
+export function checkRateLimit(
   identifier: string,
   maxRequests: number,
   windowMs: number,
