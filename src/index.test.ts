@@ -292,7 +292,7 @@ describe("handleChatRequest", () => {
     const response = await handleChatRequest(request, env);
 
     expect(response.status).toBe(413);
-    const json = await response.json();
+    const json = (await response.json()) as { error: string };
     expect(json.error).toContain("Request body too large");
     expect(runMock).not.toHaveBeenCalled();
   });
@@ -815,7 +815,7 @@ describe("parseJsonBodyWithLimit", () => {
     expect(result).toHaveProperty("error");
     if ("error" in result) {
       expect(result.error.status).toBe(413);
-      const json = await result.error.json();
+      const json = (await result.error.json()) as { error: string };
       expect(json.error).toContain("Request body too large");
     }
   });
@@ -831,7 +831,7 @@ describe("parseJsonBodyWithLimit", () => {
     expect(result).toHaveProperty("error");
     if ("error" in result) {
       expect(result.error.status).toBe(400);
-      const json = await result.error.json();
+      const json = (await result.error.json()) as { error: string };
       expect(json.error).toBe("Invalid JSON body");
     }
   });
