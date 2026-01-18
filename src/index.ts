@@ -54,18 +54,6 @@ export default {
       });
     }
 
-    if (url.pathname === "/api/config") {
-      if (request.method === "GET") {
-        return applySecurityHeaders(await handleConfigRequest(env), {
-          cacheControl: "no-store",
-        });
-      }
-
-      return applySecurityHeaders(new Response("Method not allowed", { status: 405 }), {
-        cacheControl: "no-store",
-      });
-    }
-
     // API Routes
     if (url.pathname === "/api/chat") {
       // Handle POST requests for chat
@@ -269,24 +257,6 @@ async function parseJsonBodyWithLimit(
       ),
     };
   }
-}
-
-async function handleConfigRequest(env: Env): Promise<Response> {
-  const MODEL_ID = env.MODEL_ID || DEFAULT_MODEL_ID;
-  const models = parseModelAllowlist(env.MODEL_ALLOWLIST, MODEL_ID);
-
-  return new Response(
-    JSON.stringify({
-      defaultModel: MODEL_ID,
-      models,
-    }),
-    {
-      headers: {
-        ...JSON_HEADERS,
-        "Cache-Control": "no-store",
-      },
-    },
-  );
 }
 
 /**

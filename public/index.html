@@ -102,37 +102,37 @@
         background-color: white;
       }
 
-      .chat-controls {
+      .chat-status {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-        padding: 0.5rem 0.75rem;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.5rem 0.75rem 0;
         border-top: 1px solid var(--border-color);
         background-color: white;
         font-size: 0.9rem;
       }
 
-      .chat-controls label {
-        color: var(--text-light);
-      }
-
-      #model-select {
-        padding: 0.4rem 0.6rem;
-        border: 1px solid var(--border-color);
-        border-radius: 4px;
-        background-color: white;
-        font-size: 0.9rem;
-      }
-
-      .model-status {
-        margin-left: auto;
-        color: var(--text-light);
-        font-size: 0.8rem;
-      }
-
       .context-status {
         color: var(--text-light);
         font-size: 0.75rem;
+        letter-spacing: 0.01em;
+      }
+
+      .presence-status {
+        color: var(--text-light);
+        font-size: 0.75rem;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        border: 1px solid var(--border-color);
+        background: white;
+        transition: all 0.2s ease;
+      }
+
+      .presence-status.active {
+        color: var(--primary-color);
+        border-color: rgba(246, 130, 31, 0.4);
+        box-shadow: 0 0 12px rgba(246, 130, 31, 0.25);
       }
 
       #user-input {
@@ -147,22 +147,73 @@
 
       #send-button {
         margin-left: 0.5rem;
-        padding: 0 1rem;
-        background-color: var(--primary-color);
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0 1.1rem;
+        min-height: 44px;
+        background: linear-gradient(135deg, #f6821f 0%, #ffb347 100%);
         color: white;
         border: none;
         border-radius: 4px;
         cursor: pointer;
-        transition: background-color 0.2s;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        box-shadow: 0 10px 20px rgba(246, 130, 31, 0.2);
+        position: relative;
+        overflow: hidden;
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.2s ease;
       }
 
       #send-button:hover {
-        background-color: var(--primary-hover);
+        transform: translateY(-1px);
+        box-shadow: 0 14px 24px rgba(246, 130, 31, 0.35);
       }
 
       #send-button:disabled {
         background-color: var(--text-light);
         cursor: not-allowed;
+        box-shadow: none;
+        transform: none;
+      }
+
+      #send-button::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          120deg,
+          rgba(255, 255, 255, 0.1),
+          rgba(255, 255, 255, 0.45),
+          rgba(255, 255, 255, 0.1)
+        );
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+
+      #send-button:not(:disabled):hover::after {
+        opacity: 1;
+      }
+
+      #send-button.is-sending {
+        transform: translateY(0);
+        box-shadow: 0 0 20px rgba(246, 130, 31, 0.35);
+      }
+
+      .send-icon {
+        width: 18px;
+        height: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .send-icon svg {
+        width: 100%;
+        height: 100%;
+        fill: currentColor;
       }
 
       .typing-indicator {
@@ -197,11 +248,9 @@
         AI is thinking...
       </div>
 
-      <div class="chat-controls">
-        <label for="model-select">Model</label>
-        <select id="model-select" disabled></select>
-        <span class="model-status" id="model-status">Loading models…</span>
+      <div class="chat-status">
         <span class="context-status" id="context-status"></span>
+        <span class="presence-status" id="presence-status">Ready</span>
       </div>
 
       <div class="message-input">
@@ -211,7 +260,16 @@
           rows="1"
           autofocus
         ></textarea>
-        <button id="send-button">Send</button>
+        <button id="send-button" type="button">
+          <span class="send-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path
+                d="M3.4 20.6 22 12 3.4 3.4l-.8 6.2L14 12 2.6 14.4l.8 6.2z"
+              />
+            </svg>
+          </span>
+          <span class="send-label">Send</span>
+        </button>
       </div>
     </div>
 
