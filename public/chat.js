@@ -9,9 +9,8 @@ const chatMessages = document.getElementById("chat-messages");
 const userInput = document.getElementById("user-input");
 const sendButton = document.getElementById("send-button");
 const typingIndicator = document.getElementById("typing-indicator");
-const modelSelect = document.getElementById("model-select");
-const modelStatus = document.getElementById("model-status");
 const contextStatus = document.getElementById("context-status");
+const presenceStatus = document.getElementById("presence-status");
 
 // Configuration
 const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
@@ -29,7 +28,6 @@ let chatHistory = [
 ];
 let isProcessing = false;
 
-loadModelConfig();
 updateContextStatus();
 addMessageToChat("assistant", initialAssistantMessage);
 
@@ -49,57 +47,6 @@ userInput.addEventListener("keydown", function (e) {
 
 // Send button click handler
 sendButton.addEventListener("click", sendMessage);
-
-if (modelSelect) {
-  modelSelect.addEventListener("change", () => {
-    if (modelStatus) {
-      modelStatus.textContent = `Using ${modelSelect.value}`;
-    }
-  });
-}
-
-async function loadModelConfig() {
-  if (!modelSelect || !modelStatus) return;
-
-  try {
-    const response = await fetch("/api/config");
-    if (!response.ok) {
-      throw new Error(`Config request failed: ${response.status}`);
-    }
-
-    const config = await response.json();
-    const defaultModel =
-      typeof config.defaultModel === "string" ? config.defaultModel : "";
-    const models = Array.isArray(config.models)
-      ? config.models.filter((model) => typeof model === "string")
-      : [];
-
-    const availableModels = models.length > 0 ? models : [defaultModel];
-
-    modelSelect.innerHTML = "";
-    for (const model of availableModels) {
-      const option = document.createElement("option");
-      option.value = model;
-      option.textContent = model;
-      modelSelect.appendChild(option);
-    }
-
-    if (defaultModel) {
-      modelSelect.value = defaultModel;
-      modelStatus.textContent = `Using ${defaultModel}`;
-    } else if (availableModels.length > 0) {
-      modelStatus.textContent = `Using ${availableModels[0]}`;
-    } else {
-      modelStatus.textContent = "No models available";
-    }
-
-    modelSelect.disabled = availableModels.length === 0;
-  } catch (error) {
-    console.error("Failed to load model config:", error);
-    modelSelect.disabled = true;
-    modelStatus.textContent = "Model list unavailable";
-  }
-}
 
 /**
  * Sends a message to the chat API and processes the response
@@ -123,6 +70,8 @@ async function sendMessage() {
   isProcessing = true;
   userInput.disabled = true;
   sendButton.disabled = true;
+  sendButton.classList.add("is-sending");
+  updatePresenceStatus("Thinking…");
 
   // Add user message to chat
   addMessageToChat("user", message);
@@ -156,9 +105,6 @@ async function sendMessage() {
         messages: chatHistory,
         clientContext: getClientContext(),
       };
-      if (modelSelect && modelSelect.value) {
-        payload.model = modelSelect.value;
-      }
 
       const response = await fetch("/api/chat", {
         method: "POST",
@@ -176,6 +122,10 @@ async function sendMessage() {
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || `Server error: ${response.status}`);
+      }
+
+      if (!response.body) {
+        throw new Error("Streaming response unavailable");
       }
 
       // Process streaming response
@@ -268,6 +218,8 @@ async function sendMessage() {
     isProcessing = false;
     userInput.disabled = false;
     sendButton.disabled = false;
+    sendButton.classList.remove("is-sending");
+    updatePresenceStatus("Ready");
     userInput.focus();
   }
 }
@@ -329,4 +281,10 @@ function updateContextStatus() {
 
   const context = getClientContext();
   contextStatus.textContent = `Local time synced (${context.timeZone})`;
+}
+
+function updatePresenceStatus(text) {
+  if (!presenceStatus) return;
+  presenceStatus.textContent = text;
+  presenceStatus.classList.toggle("active", text !== "Ready");
 }
