@@ -16,6 +16,7 @@ const DEFAULT_SYSTEM_PROMPT =
 const DEFAULT_MAX_MESSAGE_LENGTH = 10000;
 const DEFAULT_MAX_MESSAGES = 100;
 const DEFAULT_MAX_TOKENS = 1024;
+const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const DEFAULT_RATE_LIMIT_REQUESTS = 20; // 20 requests
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000; // per 60 seconds
 
@@ -45,15 +46,23 @@ export default {
 
     // Handle static assets (frontend)
     if (url.pathname === "/" || !url.pathname.startsWith("/api/")) {
-      return env.ASSETS.fetch(request);
+      const response = await env.ASSETS.fetch(request);
+      const contentType = response.headers.get("content-type") || "";
+      return applySecurityHeaders(response, {
+        isHtml: contentType.includes("text/html"),
+      });
     }
 
     if (url.pathname === "/api/config") {
       if (request.method === "GET") {
-        return handleConfigRequest(env);
+        return applySecurityHeaders(await handleConfigRequest(env), {
+          cacheControl: "no-store",
+        });
       }
 
-      return new Response("Method not allowed", { status: 405 });
+      return applySecurityHeaders(new Response("Method not allowed", { status: 405 }), {
+        cacheControl: "no-store",
+      });
     }
 
     // API Routes
@@ -64,11 +73,15 @@ export default {
       }
 
       // Method not allowed for other request types
-      return new Response("Method not allowed", { status: 405 });
+      return applySecurityHeaders(new Response("Method not allowed", { status: 405 }), {
+        cacheControl: "no-store",
+      });
     }
 
     // Handle 404 for unmatched routes
-    return new Response("Not found", { status: 404 });
+    return applySecurityHeaders(new Response("Not found", { status: 404 }), {
+      cacheControl: "no-store",
+    });
   },
 } satisfies ExportedHandler<Env>;
 
@@ -76,6 +89,26 @@ export default {
  * JSON response headers constant
  */
 const JSON_HEADERS = { "content-type": "application/json" } as const;
+const BASE_SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Embedder-Policy": "require-corp",
+  "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+} as const;
+const HTML_CONTENT_SECURITY_POLICY =
+  "default-src 'self'; " +
+  "script-src 'self'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; " +
+  "connect-src 'self'; " +
+  "base-uri 'self'; " +
+  "form-action 'self'; " +
+  "frame-ancestors 'none'; " +
+  "object-src 'none'";
 
 /**
  * Set of valid chat message roles
@@ -102,6 +135,39 @@ function parseModelAllowlist(
   return Array.from(new Set(models));
 }
 
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function applySecurityHeaders(
+  response: Response,
+  options: { isHtml?: boolean; cacheControl?: string } = {},
+): Response {
+  const headers = new Headers(response.headers);
+
+  Object.entries(BASE_SECURITY_HEADERS).forEach(([key, value]) => {
+    headers.set(key, value);
+  });
+
+  if (options.cacheControl) {
+    headers.set("Cache-Control", options.cacheControl);
+  }
+
+  if (options.isHtml) {
+    headers.set("Content-Security-Policy", HTML_CONTENT_SECURITY_POLICY);
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 async function handleConfigRequest(env: Env): Promise<Response> {
   const MODEL_ID = env.MODEL_ID || DEFAULT_MODEL_ID;
   const models = parseModelAllowlist(env.MODEL_ALLOWLIST, MODEL_ID);
@@ -111,7 +177,12 @@ async function handleConfigRequest(env: Env): Promise<Response> {
       defaultModel: MODEL_ID,
       models,
     }),
-    { headers: JSON_HEADERS },
+    {
+      headers: {
+        ...JSON_HEADERS,
+        "Cache-Control": "no-store",
+      },
+    },
   );
 }
 
@@ -202,45 +273,86 @@ export async function handleChatRequest(
   const MODEL_ID = env.MODEL_ID || DEFAULT_MODEL_ID;
   const MODEL_ALLOWLIST = parseModelAllowlist(env.MODEL_ALLOWLIST, MODEL_ID);
   const SYSTEM_PROMPT = env.SYSTEM_PROMPT || DEFAULT_SYSTEM_PROMPT;
-  const MAX_MESSAGE_LENGTH = parseInt(
-    env.MAX_MESSAGE_LENGTH || String(DEFAULT_MAX_MESSAGE_LENGTH),
+  const MAX_MESSAGE_LENGTH = parsePositiveInt(
+    env.MAX_MESSAGE_LENGTH,
+    DEFAULT_MAX_MESSAGE_LENGTH,
   );
-  const MAX_MESSAGES = parseInt(env.MAX_MESSAGES || String(DEFAULT_MAX_MESSAGES));
-  const MAX_TOKENS = parseInt(env.MAX_TOKENS || String(DEFAULT_MAX_TOKENS));
-  const RATE_LIMIT_REQUESTS = parseInt(
-    env.RATE_LIMIT_REQUESTS || String(DEFAULT_RATE_LIMIT_REQUESTS),
+  const MAX_MESSAGES = parsePositiveInt(env.MAX_MESSAGES, DEFAULT_MAX_MESSAGES);
+  const MAX_TOKENS = parsePositiveInt(env.MAX_TOKENS, DEFAULT_MAX_TOKENS);
+  const MAX_BODY_BYTES = parsePositiveInt(
+    env.MAX_BODY_BYTES,
+    DEFAULT_MAX_BODY_BYTES,
   );
-  const RATE_LIMIT_WINDOW_MS = parseInt(
-    env.RATE_LIMIT_WINDOW_MS || String(DEFAULT_RATE_LIMIT_WINDOW_MS),
+  const RATE_LIMIT_REQUESTS = parsePositiveInt(
+    env.RATE_LIMIT_REQUESTS,
+    DEFAULT_RATE_LIMIT_REQUESTS,
+  );
+  const RATE_LIMIT_WINDOW_MS = parsePositiveInt(
+    env.RATE_LIMIT_WINDOW_MS,
+    DEFAULT_RATE_LIMIT_WINDOW_MS,
   );
 
   // Check rate limit using IP address or CF-Connecting-IP header
+  const forwardedFor = request.headers.get("X-Forwarded-For") || "";
+  const forwardedIp = forwardedFor.split(",")[0]?.trim();
   const clientIp =
-    request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For") || "unknown";
+    request.headers.get("CF-Connecting-IP") ||
+    forwardedIp ||
+    "unknown";
 
   if (checkRateLimit(clientIp, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS)) {
-    return new Response(
-      JSON.stringify({
-        error: `Rate limit exceeded. Please try again later.`,
-      }),
-      {
-        status: 429,
-        headers: {
-          ...JSON_HEADERS,
-          "Retry-After": String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
-        }
-      },
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({
+          error: `Rate limit exceeded. Please try again later.`,
+        }),
+        {
+          status: 429,
+          headers: {
+            ...JSON_HEADERS,
+            "Retry-After": String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
+          },
+        },
+      ),
+      { cacheControl: "no-store" },
     );
   }
 
   try {
     let body: unknown;
+    const contentType = request.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({ error: "Content-Type must be application/json" }),
+          { status: 415, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    const contentLength = request.headers.get("content-length");
+    if (contentLength && Number.parseInt(contentLength, 10) > MAX_BODY_BYTES) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: `Request body too large: maximum ${MAX_BODY_BYTES} bytes allowed`,
+          }),
+          { status: 413, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
     try {
       body = await request.json();
     } catch {
-      return new Response(
-        JSON.stringify({ error: "Invalid JSON body" }),
-        { status: 400, headers: JSON_HEADERS },
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({ error: "Invalid JSON body" }),
+          { status: 400, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
       );
     }
 
@@ -250,44 +362,56 @@ export async function handleChatRequest(
     };
 
     if (!Array.isArray(messages) || !messages.every(isChatMessage)) {
-      return new Response(
-        JSON.stringify({
-          error: "Invalid request: messages must be an array of chat messages",
-        }),
-        { status: 400, headers: JSON_HEADERS },
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: "Invalid request: messages must be an array of chat messages",
+          }),
+          { status: 400, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
       );
     }
 
     // Validate message count
     if (messages.length > MAX_MESSAGES) {
-      return new Response(
-        JSON.stringify({
-          error: `Too many messages: maximum ${MAX_MESSAGES} messages allowed`,
-        }),
-        { status: 400, headers: JSON_HEADERS },
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: `Too many messages: maximum ${MAX_MESSAGES} messages allowed`,
+          }),
+          { status: 400, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
       );
     }
 
     // Validate message lengths
     for (const message of messages) {
       if (message.content.length > MAX_MESSAGE_LENGTH) {
-        return new Response(
-          JSON.stringify({
-            error: `Message too long: maximum ${MAX_MESSAGE_LENGTH} characters allowed`,
-          }),
-          { status: 400, headers: JSON_HEADERS },
+        return applySecurityHeaders(
+          new Response(
+            JSON.stringify({
+              error: `Message too long: maximum ${MAX_MESSAGE_LENGTH} characters allowed`,
+            }),
+            { status: 400, headers: JSON_HEADERS },
+          ),
+          { cacheControl: "no-store" },
         );
       }
     }
 
     const requestedModel = typeof model === "string" ? model.trim() : undefined;
     if (requestedModel && !MODEL_ALLOWLIST.includes(requestedModel)) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "Invalid model selection. Please choose a model from the allowed list.",
-        }),
-        { status: 400, headers: JSON_HEADERS },
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error:
+              "Invalid model selection. Please choose a model from the allowed list.",
+          }),
+          { status: 400, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
       );
     }
 
@@ -321,12 +445,15 @@ export async function handleChatRequest(
     );
 
     // Return streaming response
-    return response;
+    return applySecurityHeaders(response, { cacheControl: "no-store" });
   } catch (error) {
     console.error("Error processing chat request:", error);
-    return new Response(
-      JSON.stringify({ error: "Failed to process request" }),
-      { status: 500, headers: JSON_HEADERS },
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({ error: "Failed to process request" }),
+        { status: 500, headers: JSON_HEADERS },
+      ),
+      { cacheControl: "no-store" },
     );
   }
 }
