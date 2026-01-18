@@ -22,6 +22,7 @@ export interface Env {
   MAX_MESSAGE_LENGTH?: string;
   MAX_MESSAGES?: string;
   MAX_TOKENS?: string;
+  MAX_BODY_BYTES?: string;
   RATE_LIMIT_REQUESTS?: string;
   RATE_LIMIT_WINDOW_MS?: string;
 }

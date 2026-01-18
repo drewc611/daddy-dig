@@ -484,7 +484,7 @@ export async function handleChatRequest(
       );
     }
 
-    const modelToUse = requestedModel || MODEL_ID;
+    const modelToUse = (requestedModel || MODEL_ID) as keyof AiModels;
     const normalizedClientContext = normalizeClientContext(clientContext);
     const contextualSystemPrompt = buildContextualSystemPrompt(
       SYSTEM_PROMPT,
