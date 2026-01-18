@@ -130,6 +130,11 @@
         font-size: 0.8rem;
       }
 
+      .context-status {
+        color: var(--text-light);
+        font-size: 0.75rem;
+      }
+
       #user-input {
         flex: 1;
         padding: 0.75rem;
@@ -196,6 +201,7 @@
         <label for="model-select">Model</label>
         <select id="model-select" disabled></select>
         <span class="model-status" id="model-status">Loading models…</span>
+        <span class="context-status" id="context-status"></span>
       </div>
 
       <div class="message-input">

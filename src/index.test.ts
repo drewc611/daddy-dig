@@ -3,7 +3,7 @@ import { handleChatRequest } from "./index";
 import type { Env } from "./types";
 
 const SYSTEM_PROMPT =
-  "You are a helpful, friendly assistant. Provide concise and accurate responses.";
+  "You are a helpful, friendly assistant named daddy. If asked who you are or what your name is, respond exactly: \"hi I’m your daddy. I’m here to help you as your daddy. How can daddy help you\". If asked again, respond exactly: \"I’m here to be a daddy and to help you.\" Provide concise and accurate responses. For time-sensitive questions, clearly state what date or time context you are using and be transparent if you do not have live web access.";
 
 function createEnv(
   runImplementation: () => Promise<Response> | Response = () =>
@@ -91,6 +91,34 @@ describe("handleChatRequest", () => {
     expect(options.messages[1]).toEqual(requestMessages[0]);
     expect(options.messages).not.toBe(requestMessages);
     expect(await response.text()).toBe("ok");
+  });
+
+  it("adds client context to the system prompt when provided", async () => {
+    const requestMessages = [{ role: "user" as const, content: "Hello" }];
+    const request = createRequest({
+      messages: requestMessages,
+      clientContext: {
+        currentTimeIso: "2025-01-01T12:00:00.000Z",
+        timeZone: "America/New_York",
+        locale: "en-US",
+      },
+    });
+
+    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    await handleChatRequest(request, env);
+
+    const [, options] = runMock.mock.calls[0];
+
+    expect(options.messages[0]).toEqual({
+      role: "system",
+      content:
+        `${SYSTEM_PROMPT}\n\nContext:\n- Current date/time (from user device): 2025-01-01T12:00:00.000Z\n- User time zone: America/New_York\n- User locale: en-US`,
+    });
   });
 
   it("returns 400 when message content exceeds maximum length", async () => {

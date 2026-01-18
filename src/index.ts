@@ -7,18 +7,19 @@
  *
  * @license MIT
  */
-import { Env, ChatMessage } from "./types";
+import { Env, ChatMessage, ClientContext } from "./types";
 
 // Default configuration values (can be overridden via environment variables)
 const DEFAULT_MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const DEFAULT_SYSTEM_PROMPT =
-  "You are a helpful, friendly assistant named daddy. If asked who you are or what your name is, respond exactly: \"hi I’m your daddy. I’m here to help you as your daddy. How can daddy help you\". If asked again, respond exactly: \"I’m here to be a daddy and to help you.\" Provide concise and accurate responses.";
+  "You are a helpful, friendly assistant named daddy. If asked who you are or what your name is, respond exactly: \"hi I’m your daddy. I’m here to help you as your daddy. How can daddy help you\". If asked again, respond exactly: \"I’m here to be a daddy and to help you.\" Provide concise and accurate responses. For time-sensitive questions, clearly state what date or time context you are using and be transparent if you do not have live web access.";
 const DEFAULT_MAX_MESSAGE_LENGTH = 10000;
 const DEFAULT_MAX_MESSAGES = 100;
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const DEFAULT_RATE_LIMIT_REQUESTS = 20; // 20 requests
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000; // per 60 seconds
+const MAX_CONTEXT_FIELD_LENGTH = 300;
 
 // Simple in-memory rate limiter (resets on Worker restart)
 // For production, consider using Durable Objects or Rate Limiting API
@@ -114,6 +115,78 @@ const HTML_CONTENT_SECURITY_POLICY =
  * Set of valid chat message roles
  */
 const VALID_ROLES = new Set<ChatMessage["role"]>(["system", "user", "assistant"]);
+
+function sanitizeContextValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.slice(0, MAX_CONTEXT_FIELD_LENGTH);
+}
+
+function normalizeClientContext(value: unknown): ClientContext | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+
+  const raw = value as ClientContext;
+
+  const currentTimeIso = sanitizeContextValue(raw.currentTimeIso);
+  const parsedTime =
+    currentTimeIso && Number.isNaN(Date.parse(currentTimeIso))
+      ? undefined
+      : currentTimeIso;
+
+  const timeZone = sanitizeContextValue(raw.timeZone);
+  const locale = sanitizeContextValue(raw.locale);
+  const userAgent = sanitizeContextValue(raw.userAgent);
+
+  if (!parsedTime && !timeZone && !locale && !userAgent) {
+    return undefined;
+  }
+
+  return {
+    currentTimeIso: parsedTime,
+    timeZone,
+    locale,
+    userAgent,
+  };
+}
+
+function buildContextualSystemPrompt(
+  basePrompt: string,
+  clientContext?: ClientContext,
+): string {
+  if (!clientContext) {
+    return basePrompt;
+  }
+
+  const contextLines: string[] = [];
+
+  if (clientContext.currentTimeIso) {
+    contextLines.push(
+      `Current date/time (from user device): ${clientContext.currentTimeIso}`,
+    );
+  }
+  if (clientContext.timeZone) {
+    contextLines.push(`User time zone: ${clientContext.timeZone}`);
+  }
+  if (clientContext.locale) {
+    contextLines.push(`User locale: ${clientContext.locale}`);
+  }
+  if (clientContext.userAgent) {
+    contextLines.push(`User agent: ${clientContext.userAgent}`);
+  }
+
+  if (contextLines.length === 0) {
+    return basePrompt;
+  }
+
+  return `${basePrompt}\n\nContext:\n- ${contextLines.join("\n- ")}`;
+}
 
 function parseModelAllowlist(
   allowlistValue: string | undefined,
@@ -381,9 +454,10 @@ export async function handleChatRequest(
 
     body = parsedBody.data;
 
-    const { messages, model } = (body ?? {}) as {
+    const { messages, model, clientContext } = (body ?? {}) as {
       messages?: unknown;
       model?: unknown;
+      clientContext?: unknown;
     };
 
     if (!Array.isArray(messages) || !messages.every(isChatMessage)) {
@@ -441,6 +515,11 @@ export async function handleChatRequest(
     }
 
     const modelToUse = requestedModel || MODEL_ID;
+    const normalizedClientContext = normalizeClientContext(clientContext);
+    const contextualSystemPrompt = buildContextualSystemPrompt(
+      SYSTEM_PROMPT,
+      normalizedClientContext,
+    );
 
     const normalizedMessages = messages.map((message) => ({
       role: message.role,
@@ -449,7 +528,10 @@ export async function handleChatRequest(
 
     // Add system prompt if not present
     if (!normalizedMessages.some((msg) => msg.role === "system")) {
-      normalizedMessages.unshift({ role: "system", content: SYSTEM_PROMPT });
+      normalizedMessages.unshift({
+        role: "system",
+        content: contextualSystemPrompt,
+      });
     }
 
     const response = await env.AI.run(

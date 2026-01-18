@@ -33,3 +33,13 @@ export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
+
+/**
+ * Context data sent from the client to improve responses.
+ */
+export interface ClientContext {
+  currentTimeIso?: string;
+  timeZone?: string;
+  locale?: string;
+  userAgent?: string;
+}
