@@ -10,12 +10,12 @@
 import { Env, ChatMessage, ClientContext } from "./types";
 
 // Default configuration values (can be overridden via environment variables)
-const DEFAULT_MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_MODEL_ID = "@cf/meta/llama-3.1-8b-instruct-fast";
 const DEFAULT_SYSTEM_PROMPT =
-  "You are a helpful, friendly assistant named daddy. If asked who you are or what your name is, respond exactly: \"hi I’m your daddy. I’m here to help you as your daddy. How can daddy help you\". If asked again, respond exactly: \"I’m here to be a daddy and to help you.\" Provide concise and accurate responses. For time-sensitive questions, clearly state what date or time context you are using and be transparent if you do not have live web access.";
+  "Hi, this is a test application here to serve as an AI Chatbot and other resources. Please acknowledge that nothing here is kept or saved and this is just purely for test purposes. Provide concise and accurate responses. For time-sensitive questions, clearly state what date or time context you are using and be transparent if you do not have live web access.";
 const DEFAULT_MAX_MESSAGE_LENGTH = 10000;
 const DEFAULT_MAX_MESSAGES = 100;
-const DEFAULT_MAX_TOKENS = 1024;
+const DEFAULT_MAX_TOKENS = 512;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const DEFAULT_RATE_LIMIT_REQUESTS = 20; // 20 requests
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000; // per 60 seconds
@@ -296,6 +296,15 @@ export function checkRateLimit(
 ): boolean {
   const now = Date.now();
   const record = rateLimitMap.get(identifier);
+
+  // Clean up expired entries to prevent memory leak (limit to 1000 entries max)
+  if (rateLimitMap.size > 1000) {
+    for (const [key, value] of rateLimitMap.entries()) {
+      if (now > value.resetTime) {
+        rateLimitMap.delete(key);
+      }
+    }
+  }
 
   if (!record || now > record.resetTime) {
     // First request or window expired, create new record

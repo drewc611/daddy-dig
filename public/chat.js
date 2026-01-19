@@ -14,11 +14,11 @@ const presenceStatus = document.getElementById("presence-status");
 
 // Configuration
 const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
-const REQUEST_TIMEOUT = 60000; // Request timeout in milliseconds (60 seconds)
+const REQUEST_TIMEOUT = 30000; // Request timeout in milliseconds (30 seconds - faster model)
 
 // Chat state
 const initialAssistantMessage =
-  "Hi! I'm the daddy, powered by Cloudflare Workers AI. How can I help you today?";
+  "Hi! This is a test application powered by Cloudflare Workers AI. Please note that nothing here is kept or saved - this is purely for test purposes. How can I help you today?";
 
 let chatHistory = [
   {
@@ -92,8 +92,10 @@ async function sendMessage() {
     const assistantParagraph = assistantMessageEl.querySelector("p");
     chatMessages.appendChild(assistantMessageEl);
 
-    // Scroll to bottom
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    // Optimized scroll to bottom using requestAnimationFrame
+    requestAnimationFrame(() => {
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
 
     // Set up timeout handling
     const abortController = new AbortController();
@@ -133,6 +135,18 @@ async function sendMessage() {
       const decoder = new TextDecoder();
       let responseText = "";
       let buffer = ""; // Buffer for incomplete JSON lines
+      let scrollScheduled = false;
+
+      // Optimized scroll function using requestAnimationFrame
+      const scheduleScroll = () => {
+        if (!scrollScheduled) {
+          scrollScheduled = true;
+          requestAnimationFrame(() => {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            scrollScheduled = false;
+          });
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -162,8 +176,8 @@ async function sendMessage() {
               responseText += jsonData.response;
               assistantParagraph.textContent = responseText;
 
-              // Scroll to bottom
-              chatMessages.scrollTop = chatMessages.scrollHeight;
+              // Optimized scroll to bottom
+              scheduleScroll();
             }
           } catch (e) {
             // Only log non-empty parsing errors
@@ -231,8 +245,10 @@ function addMessageToChat(role, content) {
   const messageEl = createMessageElement(role, content);
   chatMessages.appendChild(messageEl);
 
-  // Scroll to bottom
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+  // Optimized scroll to bottom using requestAnimationFrame
+  requestAnimationFrame(() => {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  });
 }
 
 function createMessageElement(role, content) {
