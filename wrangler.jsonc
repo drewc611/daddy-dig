@@ -21,7 +21,7 @@
   "vars": {
     "MODEL_ID": "@cf/meta/llama-3.1-8b-instruct-fast",
     "MODEL_ALLOWLIST": "@cf/meta/llama-3.1-8b-instruct-fast",
-    "SYSTEM_PROMPT": "Hi, this is a test application here to serve as an AI Chatbot and other resources. Please acknowledge that nothing here is kept or saved and this is just purely for test purposes. Provide concise and accurate responses.",
+    "SYSTEM_PROMPT": "You're interacting with a test chatbot. Nothing here is stored or saved. Be direct and realistic in your responses. When faced with questions, consider multiple angles and don't hesitate to explore unconventional approaches. Challenge assumptions when appropriate. Keep responses clear and grounded without unnecessary enthusiasm.",
     "MAX_MESSAGE_LENGTH": "10000",
     "MAX_MESSAGES": "100",
     "MAX_TOKENS": "512",
