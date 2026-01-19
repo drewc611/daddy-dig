@@ -19,12 +19,12 @@
   },
   "upload_source_maps": true,
   "vars": {
-    "MODEL_ID": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "MODEL_ALLOWLIST": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "MODEL_ID": "@cf/meta/llama-3.1-8b-instruct-fast",
+    "MODEL_ALLOWLIST": "@cf/meta/llama-3.1-8b-instruct-fast",
     "SYSTEM_PROMPT": "Hi, this is a test application here to serve as an AI Chatbot and other resources. Please acknowledge that nothing here is kept or saved and this is just purely for test purposes. Provide concise and accurate responses.",
     "MAX_MESSAGE_LENGTH": "10000",
     "MAX_MESSAGES": "100",
-    "MAX_TOKENS": "1024",
+    "MAX_TOKENS": "512",
     "RATE_LIMIT_REQUESTS": "20",
     "RATE_LIMIT_WINDOW_MS": "60000"
   }

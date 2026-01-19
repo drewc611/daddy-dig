@@ -10,12 +10,12 @@
 import { Env, ChatMessage, ClientContext } from "./types";
 
 // Default configuration values (can be overridden via environment variables)
-const DEFAULT_MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_MODEL_ID = "@cf/meta/llama-3.1-8b-instruct-fast";
 const DEFAULT_SYSTEM_PROMPT =
   "Hi, this is a test application here to serve as an AI Chatbot and other resources. Please acknowledge that nothing here is kept or saved and this is just purely for test purposes. Provide concise and accurate responses. For time-sensitive questions, clearly state what date or time context you are using and be transparent if you do not have live web access.";
 const DEFAULT_MAX_MESSAGE_LENGTH = 10000;
 const DEFAULT_MAX_MESSAGES = 100;
-const DEFAULT_MAX_TOKENS = 1024;
+const DEFAULT_MAX_TOKENS = 512;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const DEFAULT_RATE_LIMIT_REQUESTS = 20; // 20 requests
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000; // per 60 seconds
