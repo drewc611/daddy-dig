@@ -297,6 +297,15 @@ export function checkRateLimit(
   const now = Date.now();
   const record = rateLimitMap.get(identifier);
 
+  // Clean up expired entries to prevent memory leak (limit to 1000 entries max)
+  if (rateLimitMap.size > 1000) {
+    for (const [key, value] of rateLimitMap.entries()) {
+      if (now > value.resetTime) {
+        rateLimitMap.delete(key);
+      }
+    }
+  }
+
   if (!record || now > record.resetTime) {
     // First request or window expired, create new record
     rateLimitMap.set(identifier, { count: 1, resetTime: now + windowMs });

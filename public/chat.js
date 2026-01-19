@@ -18,7 +18,7 @@ const REQUEST_TIMEOUT = 60000; // Request timeout in milliseconds (60 seconds)
 
 // Chat state
 const initialAssistantMessage =
-  "Hi! I'm the daddy, powered by Cloudflare Workers AI. How can I help you today?";
+  "Hi! This is a test application powered by Cloudflare Workers AI. Please note that nothing here is kept or saved - this is purely for test purposes. How can I help you today?";
 
 let chatHistory = [
   {
