@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   handleChatRequest,
   handleAddressLookup,
+  handleIntakeLicensee,
   sanitizeContextValue,
   normalizeClientContext,
   buildContextualSystemPrompt,
@@ -60,6 +61,27 @@ function createAddressRequest(body: unknown, headers: Record<string, string> = {
     body: JSON.stringify(body),
   });
 }
+
+function createIntakeRequest(body: unknown, headers: Record<string, string> = {}) {
+  return new Request("https://example.com/api/intake-licensee", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+const VALID_INTAKE_BODY = {
+  licenseeName: "Jane Doe",
+  licenseNumber: "LIC-12345",
+  licenseType: "professional",
+  contactEmail: "jane@example.com",
+  contactPhone: "555-0100",
+  address: "123 Main St, Springfield, IL",
+  notes: "Renewal pending",
+};
 
 describe("handleChatRequest", () => {
   // Reset rate limiter state before each test
@@ -1143,5 +1165,276 @@ describe("handleAddressLookup", () => {
 
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(response.headers.get("X-Frame-Options")).toBe("DENY");
+  });
+});
+
+describe("handleIntakeLicensee", () => {
+  it("returns 400 when licenseeName is missing", async () => {
+    const request = createIntakeRequest(
+      { licenseNumber: "LIC-123", licenseType: "business" },
+      { "CF-Connecting-IP": "10.70.0.1" },
+    );
+    const { env, runMock } = createEnv();
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(400);
+    const json = (await response.json()) as { error: string };
+    expect(json.error).toContain("licenseeName");
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when licenseNumber is missing", async () => {
+    const request = createIntakeRequest(
+      { licenseeName: "Jane Doe", licenseType: "business" },
+      { "CF-Connecting-IP": "10.70.0.2" },
+    );
+    const { env, runMock } = createEnv();
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(400);
+    const json = (await response.json()) as { error: string };
+    expect(json.error).toContain("licenseNumber");
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when licenseType is missing", async () => {
+    const request = createIntakeRequest(
+      { licenseeName: "Jane Doe", licenseNumber: "LIC-123" },
+      { "CF-Connecting-IP": "10.70.0.3" },
+    );
+    const { env, runMock } = createEnv();
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(400);
+    const json = (await response.json()) as { error: string };
+    expect(json.error).toContain("licenseType");
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when licenseType is invalid", async () => {
+    const request = createIntakeRequest(
+      { licenseeName: "Jane Doe", licenseNumber: "LIC-123", licenseType: "invalid_type" },
+      { "CF-Connecting-IP": "10.70.0.4" },
+    );
+    const { env, runMock } = createEnv();
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(400);
+    const json = (await response.json()) as { error: string };
+    expect(json.error).toContain("licenseType");
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when licenseeName exceeds max length", async () => {
+    const request = createIntakeRequest(
+      {
+        licenseeName: "a".repeat(201),
+        licenseNumber: "LIC-123",
+        licenseType: "business",
+      },
+      { "CF-Connecting-IP": "10.70.0.5" },
+    );
+    const { env, runMock } = createEnv();
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(400);
+    const json = (await response.json()) as { error: string };
+    expect(json.error).toContain("licenseeName");
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("calls AI with intake data for valid submission", async () => {
+    const request = createIntakeRequest(
+      VALID_INTAKE_BODY,
+      { "CF-Connecting-IP": "10.70.1.1" },
+    );
+
+    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(200);
+    expect(runMock).toHaveBeenCalledTimes(1);
+    const [, options] = runMock.mock.calls[0];
+
+    expect(options.messages[0].role).toBe("system");
+    expect(options.messages[0].content).toContain("licensee intake");
+    expect(options.messages[1].role).toBe("user");
+    expect(options.messages[1].content).toContain("Jane Doe");
+    expect(options.messages[1].content).toContain("LIC-12345");
+    expect(options.messages[1].content).toContain("professional");
+    expect(options.messages[1].content).toContain("jane@example.com");
+    expect(options.messages[1].content).toContain("555-0100");
+    expect(options.messages[1].content).toContain("123 Main St");
+    expect(options.messages[1].content).toContain("Renewal pending");
+  });
+
+  it("submits successfully with only required fields", async () => {
+    const request = createIntakeRequest(
+      { licenseeName: "John Smith", licenseNumber: "BIZ-999", licenseType: "contractor" },
+      { "CF-Connecting-IP": "10.70.1.2" },
+    );
+
+    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(200);
+    expect(runMock).toHaveBeenCalledTimes(1);
+    const [, options] = runMock.mock.calls[0];
+
+    expect(options.messages[1].content).toContain("John Smith");
+    expect(options.messages[1].content).toContain("BIZ-999");
+    expect(options.messages[1].content).toContain("contractor");
+    // Optional fields should not appear
+    expect(options.messages[1].content).not.toContain("Contact Email");
+    expect(options.messages[1].content).not.toContain("Contact Phone");
+  });
+
+  it("includes client context in system prompt when provided", async () => {
+    const request = createIntakeRequest(
+      {
+        ...VALID_INTAKE_BODY,
+        clientContext: { timeZone: "US/Eastern", locale: "en-US" },
+      },
+      { "CF-Connecting-IP": "10.70.1.3" },
+    );
+
+    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    await handleIntakeLicensee(request, env);
+
+    const [, options] = runMock.mock.calls[0];
+    expect(options.messages[0].content).toContain("US/Eastern");
+    expect(options.messages[0].content).toContain("en-US");
+  });
+
+  it("returns 415 when Content-Type is not application/json", async () => {
+    const request = new Request("https://example.com/api/intake-licensee", {
+      method: "POST",
+      headers: {
+        "content-type": "text/plain",
+        "CF-Connecting-IP": "10.70.1.4",
+      },
+      body: JSON.stringify(VALID_INTAKE_BODY),
+    });
+
+    const { env, runMock } = createEnv();
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(415);
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for invalid JSON body", async () => {
+    const request = new Request("https://example.com/api/intake-licensee", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "CF-Connecting-IP": "10.70.1.5",
+      },
+      body: "not json",
+    });
+
+    const { env, runMock } = createEnv();
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(400);
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("handles AI service errors gracefully", async () => {
+    const request = createIntakeRequest(
+      VALID_INTAKE_BODY,
+      { "CF-Connecting-IP": "10.70.1.6" },
+    );
+
+    const runMock = vi.fn().mockRejectedValue(new Error("AI service error"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: "Failed to process licensee intake",
+    });
+  });
+
+  it("returns 429 when rate limit is exceeded", async () => {
+    const clientIp = "192.168.88.88";
+
+    const env = {
+      AI: { run: vi.fn().mockResolvedValue(new Response("ok")) },
+      ASSETS: { fetch: vi.fn() },
+      RATE_LIMIT_REQUESTS: "1",
+      RATE_LIMIT_WINDOW_MS: "60000",
+    } as unknown as Env;
+
+    const request1 = createIntakeRequest(
+      VALID_INTAKE_BODY,
+      { "CF-Connecting-IP": clientIp },
+    );
+    const response1 = await handleIntakeLicensee(request1, env);
+    expect(response1.status).toBe(200);
+
+    const request2 = createIntakeRequest(
+      VALID_INTAKE_BODY,
+      { "CF-Connecting-IP": clientIp },
+    );
+    const response2 = await handleIntakeLicensee(request2, env);
+    expect(response2.status).toBe(429);
+  });
+
+  it("applies security headers to responses", async () => {
+    const request = createIntakeRequest(
+      VALID_INTAKE_BODY,
+      { "CF-Connecting-IP": "10.70.2.1" },
+    );
+
+    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    const response = await handleIntakeLicensee(request, env);
+
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("X-Frame-Options")).toBe("DENY");
+  });
+
+  it("accepts all valid license types", async () => {
+    const validTypes = ["business", "professional", "contractor", "real_estate", "medical", "financial", "other"];
+
+    for (let i = 0; i < validTypes.length; i++) {
+      const request = createIntakeRequest(
+        { licenseeName: "Test", licenseNumber: "T-1", licenseType: validTypes[i] },
+        { "CF-Connecting-IP": `10.80.${i}.1` },
+      );
+
+      const runMock = vi.fn().mockResolvedValue(new Response("ok"));
+      const env = {
+        AI: { run: runMock },
+        ASSETS: { fetch: vi.fn() },
+      } as unknown as Env;
+
+      const response = await handleIntakeLicensee(request, env);
+      expect(response.status).toBe(200);
+    }
   });
 });

@@ -78,6 +78,16 @@ export default {
       });
     }
 
+    if (url.pathname === "/api/intake-licensee") {
+      if (request.method === "POST") {
+        return handleIntakeLicensee(request, env);
+      }
+
+      return applySecurityHeaders(new Response("Method not allowed", { status: 405 }), {
+        cacheControl: "no-store",
+      });
+    }
+
     // Handle 404 for unmatched routes
     return applySecurityHeaders(new Response("Not found", { status: 404 }), {
       cacheControl: "no-store",
@@ -714,6 +724,256 @@ export async function handleAddressLookup(
     return applySecurityHeaders(
       new Response(
         JSON.stringify({ error: "Failed to process address lookup" }),
+        { status: 500, headers: JSON_HEADERS },
+      ),
+      { cacheControl: "no-store" },
+    );
+  }
+}
+
+const INTAKE_LICENSEE_SYSTEM_PROMPT =
+  "You are a licensee intake processing assistant for administrators. " +
+  "When given licensee information, review the data and produce a structured summary. " +
+  "Verify that the information appears complete and consistent. " +
+  "Flag any fields that look incomplete, inconsistent, or potentially incorrect. " +
+  "Format your response as a clear intake summary with sections for: " +
+  "Licensee Details, Contact Information, License Information, and any Notes or Flags. " +
+  "If critical fields are missing (name or license number), clearly indicate what is needed.";
+
+const VALID_LICENSE_TYPES = new Set([
+  "business",
+  "professional",
+  "contractor",
+  "real_estate",
+  "medical",
+  "financial",
+  "other",
+]);
+
+/**
+ * Validates that a value is a non-empty trimmed string within a max length.
+ * Returns the trimmed string or undefined if invalid.
+ */
+function validateStringField(
+  value: unknown,
+  maxLength: number,
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxLength) return undefined;
+  return trimmed;
+}
+
+/**
+ * Handles licensee intake form submissions
+ *
+ * Accepts licensee data from an admin form, validates the fields,
+ * and uses AI to produce a structured intake summary.
+ *
+ * Request body format:
+ * ```json
+ * {
+ *   "licenseeName": "Jane Doe",
+ *   "licenseNumber": "LIC-12345",
+ *   "licenseType": "professional",
+ *   "contactEmail": "jane@example.com",
+ *   "contactPhone": "555-0100",
+ *   "address": "123 Main St, Springfield, IL",
+ *   "notes": "Renewal pending"
+ * }
+ * ```
+ *
+ * @param request - The incoming HTTP request
+ * @param env - Environment bindings and configuration
+ * @returns Response object (streaming or error)
+ */
+export async function handleIntakeLicensee(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const MAX_BODY_BYTES = parsePositiveInt(
+    env.MAX_BODY_BYTES,
+    DEFAULT_MAX_BODY_BYTES,
+  );
+  const MAX_TOKENS = parsePositiveInt(env.MAX_TOKENS, DEFAULT_ADDRESS_LOOKUP_MAX_TOKENS);
+  const RATE_LIMIT_REQUESTS = parsePositiveInt(
+    env.RATE_LIMIT_REQUESTS,
+    DEFAULT_RATE_LIMIT_REQUESTS,
+  );
+  const RATE_LIMIT_WINDOW_MS = parsePositiveInt(
+    env.RATE_LIMIT_WINDOW_MS,
+    DEFAULT_RATE_LIMIT_WINDOW_MS,
+  );
+
+  const forwardedFor = request.headers.get("X-Forwarded-For") || "";
+  const forwardedIp = forwardedFor.split(",")[0]?.trim();
+  const clientIp =
+    request.headers.get("CF-Connecting-IP") ||
+    forwardedIp ||
+    "unknown";
+
+  if (checkRateLimit(clientIp, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS)) {
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({
+          error: "Rate limit exceeded. Please try again later.",
+        }),
+        {
+          status: 429,
+          headers: {
+            ...JSON_HEADERS,
+            "Retry-After": String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
+          },
+        },
+      ),
+      { cacheControl: "no-store" },
+    );
+  }
+
+  try {
+    const contentType = request.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({ error: "Content-Type must be application/json" }),
+          { status: 415, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    const contentLength = request.headers.get("content-length");
+    if (contentLength && Number.parseInt(contentLength, 10) > MAX_BODY_BYTES) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: `Request body too large: maximum ${MAX_BODY_BYTES} bytes allowed`,
+          }),
+          { status: 413, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    const parsedBody = await parseJsonBodyWithLimit(request, MAX_BODY_BYTES);
+    if ("error" in parsedBody) {
+      return applySecurityHeaders(parsedBody.error, { cacheControl: "no-store" });
+    }
+
+    const {
+      licenseeName,
+      licenseNumber,
+      licenseType,
+      contactEmail,
+      contactPhone,
+      address,
+      notes,
+      clientContext,
+    } = (parsedBody.data ?? {}) as {
+      licenseeName?: unknown;
+      licenseNumber?: unknown;
+      licenseType?: unknown;
+      contactEmail?: unknown;
+      contactPhone?: unknown;
+      address?: unknown;
+      notes?: unknown;
+      clientContext?: unknown;
+    };
+
+    // Validate required fields
+    const validName = validateStringField(licenseeName, 200);
+    if (!validName) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: "Invalid request: licenseeName is required and must be a non-empty string (max 200 characters)",
+          }),
+          { status: 400, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    const validLicenseNumber = validateStringField(licenseNumber, 100);
+    if (!validLicenseNumber) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: "Invalid request: licenseNumber is required and must be a non-empty string (max 100 characters)",
+          }),
+          { status: 400, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    // Validate license type
+    const validLicenseType = validateStringField(licenseType, 50);
+    if (!validLicenseType || !VALID_LICENSE_TYPES.has(validLicenseType)) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: `Invalid request: licenseType must be one of: ${Array.from(VALID_LICENSE_TYPES).join(", ")}`,
+          }),
+          { status: 400, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    // Validate optional fields
+    const validEmail = validateStringField(contactEmail, 254);
+    const validPhone = validateStringField(contactPhone, 30);
+    const validAddress = validateStringField(address, 500);
+    const validNotes = validateStringField(notes, 2000);
+
+    // Build the intake data string for the AI
+    const intakeLines: string[] = [
+      `Licensee Name: ${validName}`,
+      `License Number: ${validLicenseNumber}`,
+      `License Type: ${validLicenseType}`,
+    ];
+
+    if (validEmail) intakeLines.push(`Contact Email: ${validEmail}`);
+    if (validPhone) intakeLines.push(`Contact Phone: ${validPhone}`);
+    if (validAddress) intakeLines.push(`Address: ${validAddress}`);
+    if (validNotes) intakeLines.push(`Notes: ${validNotes}`);
+
+    const intakeData = intakeLines.join("\n");
+
+    const normalizedClientContext = normalizeClientContext(clientContext);
+    const contextualSystemPrompt = buildContextualSystemPrompt(
+      INTAKE_LICENSEE_SYSTEM_PROMPT,
+      normalizedClientContext,
+    );
+
+    const messages = [
+      { role: "system" as const, content: contextualSystemPrompt },
+      {
+        role: "user" as const,
+        content: `Process the following licensee intake form submission and provide a structured summary:\n\n${intakeData}`,
+      },
+    ];
+
+    const modelToUse = (env.MODEL_ID || DEFAULT_MODEL_ID) as keyof AiModels;
+
+    const response = await env.AI.run(
+      modelToUse,
+      {
+        messages,
+        max_tokens: MAX_TOKENS,
+      },
+      {
+        returnRawResponse: true,
+      },
+    );
+
+    return applySecurityHeaders(response, { cacheControl: "no-store" });
+  } catch (error) {
+    console.error("Error processing licensee intake:", error);
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({ error: "Failed to process licensee intake" }),
         { status: 500, headers: JSON_HEADERS },
       ),
       { cacheControl: "no-store" },

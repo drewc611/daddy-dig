@@ -20,6 +20,15 @@ const addressInput = document.getElementById("address-input");
 const lookupButton = document.getElementById("lookup-button");
 const lookupResults = document.getElementById("lookup-results");
 
+// Intake licensee DOM elements
+const intakeLicenseeBtn = document.getElementById("intake-licensee-btn");
+const intakeModal = document.getElementById("intake-modal");
+const intakeModalClose = document.getElementById("intake-modal-close");
+const intakeForm = document.getElementById("intake-form");
+const intakeCancel = document.getElementById("intake-cancel");
+const intakeSubmit = document.getElementById("intake-submit");
+const intakeResults = document.getElementById("intake-results");
+
 // Configuration
 const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
 const REQUEST_TIMEOUT = 30000; // Request timeout in milliseconds (30 seconds - faster model)
@@ -336,10 +345,15 @@ addressModal.addEventListener("click", function (e) {
   }
 });
 
-// Close modal on Escape key
+// Close modals on Escape key
 document.addEventListener("keydown", function (e) {
-  if (e.key === "Escape" && addressModal.classList.contains("visible")) {
-    closeAddressModal();
+  if (e.key === "Escape") {
+    if (addressModal.classList.contains("visible")) {
+      closeAddressModal();
+    }
+    if (intakeModal.classList.contains("visible")) {
+      closeIntakeModal();
+    }
   }
 });
 
@@ -464,4 +478,179 @@ async function performAddressLookup() {
     addressInput.disabled = false;
     addressInput.focus();
   }
+}
+
+// ── Intake Licensee ─────────────────────────────────────────────────
+
+let isSubmittingIntake = false;
+
+function openIntakeModal() {
+  intakeModal.classList.add("visible");
+  document.getElementById("intake-name").focus();
+}
+
+function closeIntakeModal() {
+  intakeModal.classList.remove("visible");
+}
+
+function resetIntakeForm() {
+  intakeForm.reset();
+  intakeResults.textContent = "";
+  intakeResults.classList.remove("visible", "error", "success");
+}
+
+intakeLicenseeBtn.addEventListener("click", openIntakeModal);
+intakeModalClose.addEventListener("click", closeIntakeModal);
+intakeCancel.addEventListener("click", closeIntakeModal);
+
+// Close modal when clicking overlay background
+intakeModal.addEventListener("click", function (e) {
+  if (e.target === intakeModal) {
+    closeIntakeModal();
+  }
+});
+
+intakeForm.addEventListener("submit", function (e) {
+  e.preventDefault();
+  submitIntakeLicensee();
+});
+
+async function submitIntakeLicensee() {
+  if (isSubmittingIntake) return;
+
+  const licenseeName = document.getElementById("intake-name").value.trim();
+  const licenseNumber = document.getElementById("intake-license-number").value.trim();
+  const licenseType = document.getElementById("intake-license-type").value;
+  const contactEmail = document.getElementById("intake-email").value.trim();
+  const contactPhone = document.getElementById("intake-phone").value.trim();
+  const address = document.getElementById("intake-address").value.trim();
+  const notes = document.getElementById("intake-notes").value.trim();
+
+  // Client-side validation
+  if (!licenseeName) {
+    showIntakeError("Licensee name is required.");
+    return;
+  }
+  if (!licenseNumber) {
+    showIntakeError("License number is required.");
+    return;
+  }
+  if (!licenseType) {
+    showIntakeError("Please select a license type.");
+    return;
+  }
+
+  isSubmittingIntake = true;
+  intakeSubmit.disabled = true;
+  intakeResults.textContent = "";
+  intakeResults.classList.remove("error", "success");
+  intakeResults.classList.add("visible");
+
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), REQUEST_TIMEOUT);
+
+  try {
+    const payload = {
+      licenseeName,
+      licenseNumber,
+      licenseType,
+      clientContext: getClientContext(),
+    };
+
+    if (contactEmail) payload.contactEmail = contactEmail;
+    if (contactPhone) payload.contactPhone = contactPhone;
+    if (address) payload.address = address;
+    if (notes) payload.notes = notes;
+
+    const response = await fetch("/api/intake-licensee", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: abortController.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Server error: ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error("Streaming response unavailable");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let resultText = "";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      buffer += chunk;
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine === "") continue;
+
+        try {
+          const jsonData = JSON.parse(trimmedLine);
+          if (jsonData.response) {
+            resultText += jsonData.response;
+            intakeResults.textContent = resultText;
+          }
+        } catch (e) {
+          if (trimmedLine) {
+            console.error("Error parsing intake JSON:", trimmedLine, e);
+          }
+        }
+      }
+    }
+
+    // Process remaining buffer
+    if (buffer.trim()) {
+      try {
+        const jsonData = JSON.parse(buffer.trim());
+        if (jsonData.response) {
+          resultText += jsonData.response;
+          intakeResults.textContent = resultText;
+        }
+      } catch (e) {
+        console.error("Error parsing final intake buffer:", buffer, e);
+      }
+    }
+
+    if (!resultText) {
+      throw new Error("No response received from server");
+    }
+
+    intakeResults.classList.add("success");
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.error("Intake licensee error:", error);
+
+    let errorMessage = "Sorry, there was an error processing the intake.";
+    if (error.name === "AbortError") {
+      errorMessage = "Request timed out. Please try again.";
+    } else if (error.message) {
+      errorMessage = `Error: ${error.message}`;
+    }
+
+    showIntakeError(errorMessage);
+  } finally {
+    isSubmittingIntake = false;
+    intakeSubmit.disabled = false;
+  }
+}
+
+function showIntakeError(message) {
+  intakeResults.textContent = message;
+  intakeResults.classList.add("visible", "error");
+  intakeResults.classList.remove("success");
 }
