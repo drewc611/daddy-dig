@@ -12,6 +12,14 @@ const typingIndicator = document.getElementById("typing-indicator");
 const contextStatus = document.getElementById("context-status");
 const presenceStatus = document.getElementById("presence-status");
 
+// Address lookup DOM elements
+const addressLookupBtn = document.getElementById("address-lookup-btn");
+const addressModal = document.getElementById("address-modal");
+const modalClose = document.getElementById("modal-close");
+const addressInput = document.getElementById("address-input");
+const lookupButton = document.getElementById("lookup-button");
+const lookupResults = document.getElementById("lookup-results");
+
 // Configuration
 const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
 const REQUEST_TIMEOUT = 30000; // Request timeout in milliseconds (30 seconds - faster model)
@@ -303,4 +311,157 @@ function updatePresenceStatus(text) {
   if (!presenceStatus) return;
   presenceStatus.textContent = text;
   presenceStatus.classList.toggle("active", text !== "Ready");
+}
+
+// ── Address Lookup ──────────────────────────────────────────────────
+
+let isLookingUp = false;
+
+function openAddressModal() {
+  addressModal.classList.add("visible");
+  addressInput.focus();
+}
+
+function closeAddressModal() {
+  addressModal.classList.remove("visible");
+}
+
+addressLookupBtn.addEventListener("click", openAddressModal);
+modalClose.addEventListener("click", closeAddressModal);
+
+// Close modal when clicking overlay background
+addressModal.addEventListener("click", function (e) {
+  if (e.target === addressModal) {
+    closeAddressModal();
+  }
+});
+
+// Close modal on Escape key
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && addressModal.classList.contains("visible")) {
+    closeAddressModal();
+  }
+});
+
+// Submit on Enter in address input
+addressInput.addEventListener("keydown", function (e) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    performAddressLookup();
+  }
+});
+
+lookupButton.addEventListener("click", performAddressLookup);
+
+async function performAddressLookup() {
+  const address = addressInput.value.trim();
+  if (!address || isLookingUp) return;
+
+  if (address.length > 500) {
+    lookupResults.textContent =
+      "Address is too long. Please keep it under 500 characters.";
+    lookupResults.classList.add("visible", "error");
+    return;
+  }
+
+  isLookingUp = true;
+  lookupButton.disabled = true;
+  addressInput.disabled = true;
+  lookupResults.textContent = "";
+  lookupResults.classList.remove("error");
+  lookupResults.classList.add("visible");
+
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), REQUEST_TIMEOUT);
+
+  try {
+    const response = await fetch("/api/address-lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        address,
+        clientContext: getClientContext(),
+      }),
+      signal: abortController.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Server error: ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error("Streaming response unavailable");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let resultText = "";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      buffer += chunk;
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine === "") continue;
+
+        try {
+          const jsonData = JSON.parse(trimmedLine);
+          if (jsonData.response) {
+            resultText += jsonData.response;
+            lookupResults.textContent = resultText;
+          }
+        } catch (e) {
+          if (trimmedLine) {
+            console.error("Error parsing address lookup JSON:", trimmedLine, e);
+          }
+        }
+      }
+    }
+
+    // Process remaining buffer
+    if (buffer.trim()) {
+      try {
+        const jsonData = JSON.parse(buffer.trim());
+        if (jsonData.response) {
+          resultText += jsonData.response;
+          lookupResults.textContent = resultText;
+        }
+      } catch (e) {
+        console.error("Error parsing final address lookup buffer:", buffer, e);
+      }
+    }
+
+    if (!resultText) {
+      throw new Error("No response received from server");
+    }
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.error("Address lookup error:", error);
+
+    let errorMessage = "Sorry, there was an error looking up the address.";
+    if (error.name === "AbortError") {
+      errorMessage = "Request timed out. Please try again.";
+    } else if (error.message) {
+      errorMessage = `Error: ${error.message}`;
+    }
+
+    lookupResults.textContent = errorMessage;
+    lookupResults.classList.add("error");
+  } finally {
+    isLookingUp = false;
+    lookupButton.disabled = false;
+    addressInput.disabled = false;
+    addressInput.focus();
+  }
 }
