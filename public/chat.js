@@ -20,6 +20,21 @@ const addressInput = document.getElementById("address-input");
 const lookupButton = document.getElementById("lookup-button");
 const lookupResults = document.getElementById("lookup-results");
 
+// License intake DOM elements
+const licenseIntakeBtn = document.getElementById("license-intake-btn");
+const licenseModal = document.getElementById("license-modal");
+const licenseModalClose = document.getElementById("license-modal-close");
+const licenseIntakeForm = document.getElementById("license-intake-form");
+const licenseCompany = document.getElementById("license-company");
+const licenseContact = document.getElementById("license-contact");
+const licenseEmail = document.getElementById("license-email");
+const licenseProduct = document.getElementById("license-product");
+const licenseType = document.getElementById("license-type");
+const licenseSeats = document.getElementById("license-seats");
+const licenseStart = document.getElementById("license-start");
+const licenseRenewal = document.getElementById("license-renewal");
+const licenseNotes = document.getElementById("license-notes");
+
 // Configuration
 const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
 const REQUEST_TIMEOUT = 30000; // Request timeout in milliseconds (30 seconds - faster model)
@@ -338,8 +353,12 @@ addressModal.addEventListener("click", function (e) {
 
 // Close modal on Escape key
 document.addEventListener("keydown", function (e) {
-  if (e.key === "Escape" && addressModal.classList.contains("visible")) {
+  if (e.key !== "Escape") return;
+  if (addressModal.classList.contains("visible")) {
     closeAddressModal();
+  }
+  if (licenseModal.classList.contains("visible")) {
+    closeLicenseModal();
   }
 });
 
@@ -352,6 +371,64 @@ addressInput.addEventListener("keydown", function (e) {
 });
 
 lookupButton.addEventListener("click", performAddressLookup);
+
+// ── License Intake ────────────────────────────────────────────────
+
+function openLicenseModal() {
+  licenseModal.classList.add("visible");
+  licenseCompany.focus();
+}
+
+function closeLicenseModal() {
+  licenseModal.classList.remove("visible");
+}
+
+licenseIntakeBtn.addEventListener("click", openLicenseModal);
+licenseModalClose.addEventListener("click", closeLicenseModal);
+
+licenseModal.addEventListener("click", function (e) {
+  if (e.target === licenseModal) {
+    closeLicenseModal();
+  }
+});
+
+licenseIntakeForm.addEventListener("submit", function (e) {
+  e.preventDefault();
+
+  if (!licenseIntakeForm.reportValidity()) return;
+
+  const summaryLines = [
+    "License intake summary:",
+    `- Company: ${licenseCompany.value.trim()}`,
+    `- Primary contact: ${licenseContact.value.trim()}`,
+    `- Contact email: ${licenseEmail.value.trim()}`,
+    `- Product/platform: ${licenseProduct.value.trim()}`,
+    `- License type: ${licenseType.value}`,
+  ];
+
+  const seatsValue = licenseSeats.value.trim();
+  if (seatsValue) {
+    summaryLines.push(`- Seat/usage volume: ${seatsValue}`);
+  }
+
+  if (licenseStart.value) {
+    summaryLines.push(`- Start date: ${licenseStart.value}`);
+  }
+
+  if (licenseRenewal.value) {
+    summaryLines.push(`- Renewal date: ${licenseRenewal.value}`);
+  }
+
+  const notesValue = licenseNotes.value.trim();
+  if (notesValue) {
+    summaryLines.push(`- Notes: ${notesValue}`);
+  }
+
+  userInput.value = summaryLines.join("\n");
+  userInput.dispatchEvent(new Event("input", { bubbles: true }));
+  closeLicenseModal();
+  userInput.focus();
+});
 
 async function performAddressLookup() {
   const address = addressInput.value.trim();
