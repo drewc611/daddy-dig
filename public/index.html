@@ -287,6 +287,185 @@
         display: block;
       }
 
+      .chat-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 0.75rem;
+        border-top: 1px solid var(--border-color);
+        background-color: var(--surface);
+      }
+
+      .toolbar-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.4rem 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background: var(--light-bg);
+        color: var(--text-color);
+        font-size: 0.8rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .toolbar-btn:hover {
+        border-color: var(--primary-color);
+        background: rgba(109, 40, 217, 0.06);
+        color: var(--primary-color);
+      }
+
+      .toolbar-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .toolbar-btn svg {
+        width: 14px;
+        height: 14px;
+        fill: currentColor;
+      }
+
+      .modal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.5);
+        backdrop-filter: blur(4px);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .modal-overlay.visible {
+        display: flex;
+      }
+
+      .modal {
+        background: var(--surface);
+        border-radius: 16px;
+        box-shadow: 0 24px 50px rgba(15, 23, 42, 0.25);
+        width: 90%;
+        max-width: 560px;
+        max-height: 80vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--border-color);
+      }
+
+      .modal-header h2 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text-color);
+      }
+
+      .modal-close {
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: var(--text-light);
+        padding: 0.25rem;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+      }
+
+      .modal-close:hover {
+        background: var(--light-bg);
+        color: var(--text-color);
+      }
+
+      .modal-body {
+        padding: 1.25rem;
+        overflow-y: auto;
+        flex: 1;
+      }
+
+      .lookup-input-group {
+        display: flex;
+        gap: 0.5rem;
+      }
+
+      #address-input {
+        flex: 1;
+        padding: 0.65rem 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        font-family: inherit;
+        font-size: 0.9rem;
+        background: var(--light-bg);
+        transition: border 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      #address-input:focus {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 4px var(--ring-color);
+        background: var(--surface);
+      }
+
+      #lookup-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.65rem 1rem;
+        background: linear-gradient(135deg, #6d28d9 0%, #22d3ee 100%);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.85rem;
+        white-space: nowrap;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      #lookup-button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 20px rgba(109, 40, 217, 0.3);
+      }
+
+      #lookup-button:disabled {
+        background: var(--text-light);
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+
+      .lookup-results {
+        margin-top: 1rem;
+        padding: 1rem;
+        border-radius: 10px;
+        background: var(--light-bg);
+        border: 1px solid var(--border-color);
+        font-size: 0.9rem;
+        line-height: 1.7;
+        white-space: pre-wrap;
+        display: none;
+      }
+
+      .lookup-results.visible {
+        display: block;
+      }
+
+      .lookup-results.error {
+        border-color: #fca5a5;
+        background: #fef2f2;
+        color: #991b1b;
+      }
+
       footer {
         text-align: center;
         font-size: 0.85rem;
@@ -314,6 +493,15 @@
           <span class="presence-status" id="presence-status">Ready</span>
         </div>
 
+        <div class="chat-toolbar">
+          <button id="address-lookup-btn" class="toolbar-btn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5S10.62 6.5 12 6.5s2.5 1.12 2.5 2.5S13.38 11.5 12 11.5z"/>
+            </svg>
+            Address Lookup
+          </button>
+        </div>
+
         <div class="message-input">
           <textarea
             id="user-input"
@@ -337,6 +525,33 @@
       <footer>
         <p>Cloudflare Workers AI Chat Template &copy; 2025</p>
       </footer>
+    </div>
+
+    <!-- Address Lookup Modal -->
+    <div class="modal-overlay" id="address-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>Address Lookup</h2>
+          <button class="modal-close" id="modal-close" type="button" aria-label="Close">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="lookup-input-group">
+            <input
+              type="text"
+              id="address-input"
+              placeholder="Enter an address (e.g. 1600 Pennsylvania Ave, Washington DC)"
+              autocomplete="off"
+            />
+            <button id="lookup-button" type="button">Look up</button>
+          </div>
+          <div class="lookup-results" id="lookup-results"></div>
+        </div>
+      </div>
     </div>
 
     <!-- Chat app script -->

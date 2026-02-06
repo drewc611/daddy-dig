@@ -16,6 +16,7 @@ const DEFAULT_SYSTEM_PROMPT =
 const DEFAULT_MAX_MESSAGE_LENGTH = 10000;
 const DEFAULT_MAX_MESSAGES = 100;
 const DEFAULT_MAX_TOKENS = 512;
+const DEFAULT_ADDRESS_LOOKUP_MAX_TOKENS = 1024;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const DEFAULT_RATE_LIMIT_REQUESTS = 20; // 20 requests
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000; // per 60 seconds
@@ -62,6 +63,16 @@ export default {
       }
 
       // Method not allowed for other request types
+      return applySecurityHeaders(new Response("Method not allowed", { status: 405 }), {
+        cacheControl: "no-store",
+      });
+    }
+
+    if (url.pathname === "/api/address-lookup") {
+      if (request.method === "POST") {
+        return handleAddressLookup(request, env);
+      }
+
       return applySecurityHeaders(new Response("Method not allowed", { status: 405 }), {
         cacheControl: "no-store",
       });
@@ -537,6 +548,172 @@ export async function handleChatRequest(
     return applySecurityHeaders(
       new Response(
         JSON.stringify({ error: "Failed to process request" }),
+        { status: 500, headers: JSON_HEADERS },
+      ),
+      { cacheControl: "no-store" },
+    );
+  }
+}
+
+const ADDRESS_LOOKUP_SYSTEM_PROMPT =
+  "You are an address lookup assistant. When given an address, provide useful information about it. " +
+  "Include details such as: the general area or neighborhood, the city/state/country, postal code if known, " +
+  "and any notable landmarks or points of interest nearby. " +
+  "If the address appears incomplete or ambiguous, mention that and provide your best interpretation. " +
+  "Keep your response concise and well-structured. " +
+  "If the input does not appear to be a valid address, politely indicate that and ask for clarification.";
+
+/**
+ * Handles address lookup API requests
+ *
+ * Accepts an address string, sends it to the AI model for lookup information,
+ * and returns a streaming response.
+ *
+ * Request body format:
+ * ```json
+ * {
+ *   "address": "123 Main St, Springfield, IL"
+ * }
+ * ```
+ *
+ * @param request - The incoming HTTP request
+ * @param env - Environment bindings and configuration
+ * @returns Response object (streaming or error)
+ */
+export async function handleAddressLookup(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const MODEL_ID = env.MODEL_ID || DEFAULT_MODEL_ID;
+  const MAX_BODY_BYTES = parsePositiveInt(
+    env.MAX_BODY_BYTES,
+    DEFAULT_MAX_BODY_BYTES,
+  );
+  const MAX_TOKENS = parsePositiveInt(env.MAX_TOKENS, DEFAULT_ADDRESS_LOOKUP_MAX_TOKENS);
+  const RATE_LIMIT_REQUESTS = parsePositiveInt(
+    env.RATE_LIMIT_REQUESTS,
+    DEFAULT_RATE_LIMIT_REQUESTS,
+  );
+  const RATE_LIMIT_WINDOW_MS = parsePositiveInt(
+    env.RATE_LIMIT_WINDOW_MS,
+    DEFAULT_RATE_LIMIT_WINDOW_MS,
+  );
+
+  const forwardedFor = request.headers.get("X-Forwarded-For") || "";
+  const forwardedIp = forwardedFor.split(",")[0]?.trim();
+  const clientIp =
+    request.headers.get("CF-Connecting-IP") ||
+    forwardedIp ||
+    "unknown";
+
+  if (checkRateLimit(clientIp, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS)) {
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({
+          error: "Rate limit exceeded. Please try again later.",
+        }),
+        {
+          status: 429,
+          headers: {
+            ...JSON_HEADERS,
+            "Retry-After": String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
+          },
+        },
+      ),
+      { cacheControl: "no-store" },
+    );
+  }
+
+  try {
+    const contentType = request.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({ error: "Content-Type must be application/json" }),
+          { status: 415, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    const contentLength = request.headers.get("content-length");
+    if (contentLength && Number.parseInt(contentLength, 10) > MAX_BODY_BYTES) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: `Request body too large: maximum ${MAX_BODY_BYTES} bytes allowed`,
+          }),
+          { status: 413, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    const parsedBody = await parseJsonBodyWithLimit(request, MAX_BODY_BYTES);
+    if ("error" in parsedBody) {
+      return applySecurityHeaders(parsedBody.error, { cacheControl: "no-store" });
+    }
+
+    const { address, clientContext } = (parsedBody.data ?? {}) as {
+      address?: unknown;
+      clientContext?: unknown;
+    };
+
+    if (typeof address !== "string" || !address.trim()) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: "Invalid request: address must be a non-empty string",
+          }),
+          { status: 400, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    const MAX_ADDRESS_LENGTH = 500;
+    if (address.length > MAX_ADDRESS_LENGTH) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: `Address too long: maximum ${MAX_ADDRESS_LENGTH} characters allowed`,
+          }),
+          { status: 400, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    const normalizedClientContext = normalizeClientContext(clientContext);
+    const contextualSystemPrompt = buildContextualSystemPrompt(
+      ADDRESS_LOOKUP_SYSTEM_PROMPT,
+      normalizedClientContext,
+    );
+
+    const messages = [
+      { role: "system" as const, content: contextualSystemPrompt },
+      { role: "user" as const, content: `Look up the following address and provide information about it:\n\n${address.trim()}` },
+    ];
+
+    const modelToUse = (env.MODEL_ID || DEFAULT_MODEL_ID) as keyof AiModels;
+
+    const response = await env.AI.run(
+      modelToUse,
+      {
+        messages,
+        max_tokens: MAX_TOKENS,
+      },
+      {
+        returnRawResponse: true,
+      },
+    );
+
+    return applySecurityHeaders(response, { cacheControl: "no-store" });
+  } catch (error) {
+    console.error("Error processing address lookup:", error);
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({ error: "Failed to process address lookup" }),
         { status: 500, headers: JSON_HEADERS },
       ),
       { cacheControl: "no-store" },

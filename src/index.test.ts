@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   handleChatRequest,
+  handleAddressLookup,
   sanitizeContextValue,
   normalizeClientContext,
   buildContextualSystemPrompt,
@@ -40,6 +41,17 @@ function createEnv(
 // Helper to create a mock request
 function createRequest(body: unknown, headers: Record<string, string> = {}) {
   return new Request("https://example.com/api/chat", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function createAddressRequest(body: unknown, headers: Record<string, string> = {}) {
+  return new Request("https://example.com/api/address-lookup", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -934,5 +946,202 @@ describe("checkRateLimit", () => {
     expect(checkRateLimit("ip-b", 2, 60000)).toBe(false);
     expect(checkRateLimit("ip-a", 2, 60000)).toBe(true);
     expect(checkRateLimit("ip-b", 2, 60000)).toBe(true);
+  });
+});
+
+describe("handleAddressLookup", () => {
+  it("returns 400 when address is missing", async () => {
+    const request = createAddressRequest({}, { "CF-Connecting-IP": "10.60.0.1" });
+    const { env, runMock } = createEnv();
+    const response = await handleAddressLookup(request, env);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Invalid request: address must be a non-empty string",
+    });
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when address is empty string", async () => {
+    const request = createAddressRequest({ address: "   " }, { "CF-Connecting-IP": "10.60.0.2" });
+    const { env, runMock } = createEnv();
+    const response = await handleAddressLookup(request, env);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Invalid request: address must be a non-empty string",
+    });
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when address is not a string", async () => {
+    const request = createAddressRequest({ address: 12345 }, { "CF-Connecting-IP": "10.60.0.3" });
+    const { env, runMock } = createEnv();
+    const response = await handleAddressLookup(request, env);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Invalid request: address must be a non-empty string",
+    });
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when address exceeds 500 characters", async () => {
+    const longAddress = "a".repeat(501);
+    const request = createAddressRequest({ address: longAddress }, { "CF-Connecting-IP": "10.60.0.4" });
+    const { env, runMock } = createEnv();
+    const response = await handleAddressLookup(request, env);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Address too long: maximum 500 characters allowed",
+    });
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("calls AI with address lookup system prompt and user address", async () => {
+    const request = createAddressRequest(
+      { address: "1600 Pennsylvania Ave, Washington DC" },
+      { "CF-Connecting-IP": "10.50.0.1" },
+    );
+
+    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    const response = await handleAddressLookup(request, env);
+
+    expect(runMock).toHaveBeenCalledTimes(1);
+    const [, options] = runMock.mock.calls[0];
+
+    expect(options.messages[0].role).toBe("system");
+    expect(options.messages[0].content).toContain("address lookup assistant");
+    expect(options.messages[1].role).toBe("user");
+    expect(options.messages[1].content).toContain("1600 Pennsylvania Ave, Washington DC");
+    expect(response.status).toBe(200);
+  });
+
+  it("includes client context in system prompt when provided", async () => {
+    const request = createAddressRequest(
+      {
+        address: "123 Main St",
+        clientContext: {
+          timeZone: "America/Chicago",
+          locale: "en-US",
+        },
+      },
+      { "CF-Connecting-IP": "10.50.0.2" },
+    );
+
+    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    await handleAddressLookup(request, env);
+
+    const [, options] = runMock.mock.calls[0];
+    expect(options.messages[0].content).toContain("America/Chicago");
+    expect(options.messages[0].content).toContain("en-US");
+  });
+
+  it("returns 415 when Content-Type is not application/json", async () => {
+    const request = new Request("https://example.com/api/address-lookup", {
+      method: "POST",
+      headers: {
+        "content-type": "text/plain",
+        "CF-Connecting-IP": "10.50.0.3",
+      },
+      body: JSON.stringify({ address: "123 Main St" }),
+    });
+
+    const { env, runMock } = createEnv();
+    const response = await handleAddressLookup(request, env);
+
+    expect(response.status).toBe(415);
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for invalid JSON body", async () => {
+    const request = new Request("https://example.com/api/address-lookup", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "CF-Connecting-IP": "10.50.0.4",
+      },
+      body: "not json",
+    });
+
+    const { env, runMock } = createEnv();
+    const response = await handleAddressLookup(request, env);
+
+    expect(response.status).toBe(400);
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("handles AI service errors gracefully", async () => {
+    const request = createAddressRequest(
+      { address: "123 Main St" },
+      { "CF-Connecting-IP": "10.50.0.5" },
+    );
+
+    const runMock = vi.fn().mockRejectedValue(new Error("AI service error"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    const response = await handleAddressLookup(request, env);
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: "Failed to process address lookup",
+    });
+  });
+
+  it("returns 429 when rate limit is exceeded", async () => {
+    const clientIp = "192.168.99.99";
+
+    const env = {
+      AI: { run: vi.fn().mockResolvedValue(new Response("ok")) },
+      ASSETS: { fetch: vi.fn() },
+      RATE_LIMIT_REQUESTS: "1",
+      RATE_LIMIT_WINDOW_MS: "60000",
+    } as unknown as Env;
+
+    const request1 = createAddressRequest(
+      { address: "123 Main St" },
+      { "CF-Connecting-IP": clientIp },
+    );
+    const response1 = await handleAddressLookup(request1, env);
+    expect(response1.status).toBe(200);
+
+    const request2 = createAddressRequest(
+      { address: "456 Oak Ave" },
+      { "CF-Connecting-IP": clientIp },
+    );
+    const response2 = await handleAddressLookup(request2, env);
+    expect(response2.status).toBe(429);
+    expect(await response2.json()).toEqual({
+      error: "Rate limit exceeded. Please try again later.",
+    });
+  });
+
+  it("applies security headers to responses", async () => {
+    const request = createAddressRequest({ address: "123 Main St" });
+
+    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
+    const env = {
+      AI: { run: runMock },
+      ASSETS: { fetch: vi.fn() },
+    } as unknown as Env;
+
+    const response = await handleAddressLookup(request, env);
+
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("X-Frame-Options")).toBe("DENY");
   });
 });
