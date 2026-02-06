@@ -466,6 +466,67 @@
         color: #991b1b;
       }
 
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 0.85rem;
+      }
+
+      .form-field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+
+      .form-field label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--text-light);
+      }
+
+      .form-field input,
+      .form-field select,
+      .form-field textarea {
+        padding: 0.6rem 0.7rem;
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        font-family: inherit;
+        font-size: 0.9rem;
+        background: var(--light-bg);
+        transition: border 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .form-field input:focus,
+      .form-field select:focus,
+      .form-field textarea:focus {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 4px var(--ring-color);
+        background: var(--surface);
+      }
+
+      .form-field textarea {
+        min-height: 90px;
+        resize: vertical;
+      }
+
+      .form-actions {
+        margin-top: 1rem;
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.6rem;
+      }
+
+      .form-actions .toolbar-btn {
+        font-size: 0.85rem;
+      }
+
+      .form-helper {
+        margin-top: 0.6rem;
+        font-size: 0.75rem;
+        color: var(--text-light);
+      }
+
       footer {
         text-align: center;
         font-size: 0.85rem;
@@ -499,6 +560,12 @@
               <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5S10.62 6.5 12 6.5s2.5 1.12 2.5 2.5S13.38 11.5 12 11.5z"/>
             </svg>
             Address Lookup
+          </button>
+          <button id="license-intake-btn" class="toolbar-btn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V8h4.5L14 3.5zM8 12h8v1.5H8V12zm0 4h8v1.5H8V16zM8 8h4v1.5H8V8z"/>
+            </svg>
+            License Intake
           </button>
         </div>
 
@@ -550,6 +617,79 @@
             <button id="lookup-button" type="button">Look up</button>
           </div>
           <div class="lookup-results" id="lookup-results"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- License Intake Modal -->
+    <div class="modal-overlay" id="license-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>License Intake Form</h2>
+          <button
+            class="modal-close"
+            id="license-modal-close"
+            type="button"
+            aria-label="Close"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <form id="license-intake-form">
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="license-company">Company name</label>
+                <input type="text" id="license-company" name="company" placeholder="Acme Corp" required />
+              </div>
+              <div class="form-field">
+                <label for="license-contact">Primary contact</label>
+                <input type="text" id="license-contact" name="contact" placeholder="Jordan Lee" required />
+              </div>
+              <div class="form-field">
+                <label for="license-email">Contact email</label>
+                <input type="email" id="license-email" name="email" placeholder="jordan@acme.com" required />
+              </div>
+              <div class="form-field">
+                <label for="license-product">Product / platform</label>
+                <input type="text" id="license-product" name="product" placeholder="Data Insights Suite" required />
+              </div>
+              <div class="form-field">
+                <label for="license-type">License type</label>
+                <select id="license-type" name="licenseType" required>
+                  <option value="" disabled selected>Select a type</option>
+                  <option value="Enterprise subscription">Enterprise subscription</option>
+                  <option value="Usage-based">Usage-based</option>
+                  <option value="OEM">OEM</option>
+                  <option value="Evaluation">Evaluation</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label for="license-seats">Seat / usage volume</label>
+                <input type="text" id="license-seats" name="seats" placeholder="250 seats / 1M API calls" />
+              </div>
+              <div class="form-field">
+                <label for="license-start">Start date</label>
+                <input type="date" id="license-start" name="startDate" />
+              </div>
+              <div class="form-field">
+                <label for="license-renewal">Renewal date</label>
+                <input type="date" id="license-renewal" name="renewalDate" />
+              </div>
+            </div>
+            <div class="form-field" style="margin-top: 0.85rem;">
+              <label for="license-notes">Notes / special terms</label>
+              <textarea id="license-notes" name="notes" placeholder="Add any constraints, regional requirements, or pricing notes..."></textarea>
+            </div>
+            <div class="form-actions">
+              <button class="toolbar-btn" id="license-reset" type="reset">Clear</button>
+              <button class="toolbar-btn" id="license-fill" type="submit">Fill in chat</button>
+            </div>
+            <p class="form-helper">We will format this into a chat-ready intake summary.</p>
+          </form>
         </div>
       </div>
     </div>
