@@ -1,7 +1,7 @@
 /**
  * LLM Chat Application Template
  *
- * A simple chat application using Cloudflare Workers AI.
+ * A simple chat application using a hosted LLM provider.
  * This template demonstrates how to implement an LLM-powered chat interface with
  * streaming responses using Server-Sent Events (SSE).
  *
@@ -19,6 +19,9 @@ const DEFAULT_MAX_TOKENS = 512;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const DEFAULT_RATE_LIMIT_REQUESTS = 20; // 20 requests
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000; // per 60 seconds
+const DEFAULT_ADDRESS_LOOKUP_LIMIT = 5;
+const DEFAULT_ADDRESS_LOOKUP_TIMEOUT_MS = 8000;
+const MAX_ADDRESS_QUERY_LENGTH = 200;
 export const MAX_CONTEXT_FIELD_LENGTH = 300;
 
 // Simple in-memory rate limiter (resets on Worker restart)
@@ -62,6 +65,16 @@ export default {
       }
 
       // Method not allowed for other request types
+      return applySecurityHeaders(new Response("Method not allowed", { status: 405 }), {
+        cacheControl: "no-store",
+      });
+    }
+
+    if (url.pathname === "/api/address-lookup") {
+      if (request.method === "GET") {
+        return handleAddressLookupRequest(request);
+      }
+
       return applySecurityHeaders(new Response("Method not allowed", { status: 405 }), {
         cacheControl: "no-store",
       });
@@ -204,6 +217,12 @@ export function parsePositiveInt(value: string | undefined, fallback: number): n
   return parsed;
 }
 
+export function getClientIdentifier(request: Request): string {
+  const forwardedFor = request.headers.get("X-Forwarded-For") || "";
+  const forwardedIp = forwardedFor.split(",")[0]?.trim();
+  return request.headers.get("CF-Connecting-IP") || forwardedIp || "unknown";
+}
+
 export function applySecurityHeaders(
   response: Response,
   options: { isHtml?: boolean; cacheControl?: string } = {},
@@ -282,7 +301,7 @@ export function isChatMessage(value: unknown): value is ChatMessage {
  * Check rate limit for a given identifier (e.g., IP address)
  *
  * Uses a simple in-memory sliding window algorithm. Resets on Worker restart.
- * For production use, consider Cloudflare's Rate Limiting API or Durable Objects.
+ * For production use, consider a dedicated rate limiting service or durable storage.
  *
  * @param identifier - Unique identifier (typically IP address)
  * @param maxRequests - Maximum number of requests allowed in the window
@@ -374,13 +393,8 @@ export async function handleChatRequest(
     DEFAULT_RATE_LIMIT_WINDOW_MS,
   );
 
-  // Check rate limit using IP address or CF-Connecting-IP header
-  const forwardedFor = request.headers.get("X-Forwarded-For") || "";
-  const forwardedIp = forwardedFor.split(",")[0]?.trim();
-  const clientIp =
-    request.headers.get("CF-Connecting-IP") ||
-    forwardedIp ||
-    "unknown";
+  // Check rate limit using IP address or forwarded headers
+  const clientIp = getClientIdentifier(request);
 
   if (checkRateLimit(clientIp, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS)) {
     return applySecurityHeaders(
@@ -539,6 +553,120 @@ export async function handleChatRequest(
         JSON.stringify({ error: "Failed to process request" }),
         { status: 500, headers: JSON_HEADERS },
       ),
+      { cacheControl: "no-store" },
+    );
+  }
+}
+
+export async function handleAddressLookupRequest(
+  request: Request,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const query = url.searchParams.get("q")?.trim() || "";
+
+  if (!query) {
+    return applySecurityHeaders(
+      new Response(JSON.stringify({ error: "Query parameter 'q' is required." }), {
+        status: 400,
+        headers: JSON_HEADERS,
+      }),
+      { cacheControl: "no-store" },
+    );
+  }
+
+  if (query.length > MAX_ADDRESS_QUERY_LENGTH) {
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({
+          error: `Query is too long. Maximum ${MAX_ADDRESS_QUERY_LENGTH} characters allowed.`,
+        }),
+        { status: 400, headers: JSON_HEADERS },
+      ),
+      { cacheControl: "no-store" },
+    );
+  }
+
+  const clientIp = getClientIdentifier(request);
+  if (checkRateLimit(clientIp, DEFAULT_RATE_LIMIT_REQUESTS, DEFAULT_RATE_LIMIT_WINDOW_MS)) {
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({
+          error: "Rate limit exceeded. Please try again later.",
+        }),
+        {
+          status: 429,
+          headers: {
+            ...JSON_HEADERS,
+            "Retry-After": String(Math.ceil(DEFAULT_RATE_LIMIT_WINDOW_MS / 1000)),
+          },
+        },
+      ),
+      { cacheControl: "no-store" },
+    );
+  }
+
+  const searchUrl = new URL("https://nominatim.openstreetmap.org/search");
+  searchUrl.searchParams.set("format", "jsonv2");
+  searchUrl.searchParams.set("addressdetails", "1");
+  searchUrl.searchParams.set("limit", String(DEFAULT_ADDRESS_LOOKUP_LIMIT));
+  searchUrl.searchParams.set("q", query);
+
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(
+    () => abortController.abort(),
+    DEFAULT_ADDRESS_LOOKUP_TIMEOUT_MS,
+  );
+
+  try {
+    const response = await fetch(searchUrl.toString(), {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "address-lookup-app/1.0",
+        "Accept-Language": request.headers.get("Accept-Language") || "en",
+      },
+      signal: abortController.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({ error: "Address lookup service returned an error." }),
+          { status: 502, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    const payload = (await response.json()) as Array<Record<string, unknown>>;
+    const results = payload.map((item) => ({
+      displayName: item.display_name,
+      lat: item.lat,
+      lon: item.lon,
+      type: item.type,
+      importance: item.importance,
+      address: item.address ?? {},
+    }));
+
+    return applySecurityHeaders(
+      new Response(JSON.stringify({ query, results }), {
+        status: 200,
+        headers: JSON_HEADERS,
+      }),
+      { cacheControl: "no-store" },
+    );
+  } catch (error) {
+    clearTimeout(timeoutId);
+    const message =
+      error instanceof Error && error.name === "AbortError"
+        ? "Address lookup timed out."
+        : "Unable to complete address lookup.";
+    return applySecurityHeaders(
+      new Response(JSON.stringify({ error: message }), {
+        status: 502,
+        headers: JSON_HEADERS,
+      }),
       { cacheControl: "no-store" },
     );
   }

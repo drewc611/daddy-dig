@@ -4,7 +4,7 @@
 
 export interface Env {
   /**
-   * Binding for the Workers AI API.
+   * Binding for the LLM provider API.
    */
   AI: Ai;
 

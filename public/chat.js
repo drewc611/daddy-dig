@@ -11,14 +11,19 @@ const sendButton = document.getElementById("send-button");
 const typingIndicator = document.getElementById("typing-indicator");
 const contextStatus = document.getElementById("context-status");
 const presenceStatus = document.getElementById("presence-status");
+const addressInput = document.getElementById("address-input");
+const addressButton = document.getElementById("address-button");
+const addressStatus = document.getElementById("address-status");
+const addressResults = document.getElementById("address-results");
 
 // Configuration
 const MAX_MESSAGE_LENGTH = 10000; // Maximum characters per message
 const REQUEST_TIMEOUT = 30000; // Request timeout in milliseconds (30 seconds - faster model)
+const ADDRESS_LOOKUP_ENDPOINT = "/api/address-lookup";
 
 // Chat state
 const initialAssistantMessage =
-  "Hi! This is a test application powered by Cloudflare Workers AI. Please note that nothing here is kept or saved - this is purely for test purposes. How can I help you today?";
+  "Hi! This is a test chat experience. Nothing here is stored or saved. You can also run quick address lookups above. How can I help you today?";
 
 let chatHistory = [
   {
@@ -47,6 +52,14 @@ userInput.addEventListener("keydown", function (e) {
 
 // Send button click handler
 sendButton.addEventListener("click", sendMessage);
+addressButton.addEventListener("click", handleAddressLookup);
+
+addressInput.addEventListener("keydown", function (event) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    handleAddressLookup();
+  }
+});
 
 /**
  * Sends a message to the chat API and processes the response
@@ -235,6 +248,75 @@ async function sendMessage() {
     sendButton.classList.remove("is-sending");
     updatePresenceStatus("Ready");
     userInput.focus();
+  }
+}
+
+async function handleAddressLookup() {
+  const query = addressInput.value.trim();
+
+  if (!query) {
+    addressStatus.textContent = "Enter an address to search.";
+    return;
+  }
+
+  addressButton.disabled = true;
+  addressInput.disabled = true;
+  addressStatus.textContent = "Looking up address…";
+  addressResults.innerHTML = "";
+
+  try {
+    const response = await fetch(
+      `${ADDRESS_LOOKUP_ENDPOINT}?q=${encodeURIComponent(query)}`,
+      {
+        headers: { Accept: "application/json" },
+      },
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || "Lookup failed.");
+    }
+
+    const data = await response.json();
+    const results = Array.isArray(data.results) ? data.results : [];
+
+    if (results.length === 0) {
+      addressStatus.textContent = "No matches found. Try a different address.";
+      return;
+    }
+
+    addressStatus.textContent = `Found ${results.length} result${
+      results.length === 1 ? "" : "s"
+    }.`;
+
+    results.forEach((item) => {
+      const listItem = document.createElement("li");
+      listItem.className = "lookup-result";
+
+      const title = document.createElement("strong");
+      title.textContent = item.displayName || "Unknown location";
+
+      const meta = document.createElement("div");
+      meta.className = "lookup-meta";
+      const lat = item.lat ? Number(item.lat).toFixed(6) : "—";
+      const lon = item.lon ? Number(item.lon).toFixed(6) : "—";
+      const typeLabel = item.type ? ` · ${item.type}` : "";
+      meta.textContent = `Lat ${lat}, Lon ${lon}${typeLabel}`;
+
+      listItem.appendChild(title);
+      listItem.appendChild(meta);
+      addressResults.appendChild(listItem);
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message
+        ? error.message
+        : "Unable to lookup this address.";
+    addressStatus.textContent = message;
+  } finally {
+    addressButton.disabled = false;
+    addressInput.disabled = false;
+    addressInput.focus();
   }
 }
 
