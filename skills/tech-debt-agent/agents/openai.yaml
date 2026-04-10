@@ -1,0 +1,3 @@
+display_name: Tech Debt Agent
+short_description: Find and reduce technical debt safely.
+default_prompt: Analyze this repository for technical debt and output a prioritized remediation plan with concrete next steps and validation checks.
