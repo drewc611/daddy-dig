@@ -44,3 +44,49 @@ export interface ClientContext {
   locale?: string;
   userAgent?: string;
 }
+
+/**
+ * A single verified geocoding result returned by the address lookup API.
+ *
+ * These fields come from a real geocoding service (OpenStreetMap Nominatim),
+ * not from a language model, so the coordinates and address components are
+ * verifiable data rather than generated guesses.
+ */
+export interface GeocodeResult {
+  /** Full, human-readable address as resolved by the geocoder. */
+  displayName: string;
+  /** Decimal latitude. */
+  latitude: number;
+  /** Decimal longitude. */
+  longitude: number;
+  /** High-level classification (e.g. "place", "building", "highway"). */
+  category?: string;
+  /** Specific classification (e.g. "house", "city", "postcode"). */
+  type?: string;
+  /** The kind of address the match represents (e.g. "road", "city"). */
+  addressType?: string;
+  /** Underlying OpenStreetMap object type (node/way/relation). */
+  osmType?: string;
+  /** Underlying OpenStreetMap object id. */
+  osmId?: number;
+  /** [minLat, maxLat, minLon, maxLon] as returned by the geocoder. */
+  boundingBox?: [string, string, string, string];
+  /** Structured address components (house number, road, city, etc.). */
+  address?: Record<string, string>;
+  /** Link to view the location on OpenStreetMap. */
+  mapUrl: string;
+}
+
+/**
+ * Response payload for the address lookup API.
+ */
+export interface GeocodeResponse {
+  /** The query that was geocoded. */
+  query: string;
+  /** Number of matches returned. */
+  resultCount: number;
+  /** Verified matches, best first. */
+  results: GeocodeResult[];
+  /** Required data attribution string. */
+  attribution: string;
+}

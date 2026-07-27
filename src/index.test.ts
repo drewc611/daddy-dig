@@ -1,7 +1,9 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   handleChatRequest,
   handleAddressLookup,
+  geocodeAddress,
+  normalizeGeocodeEntry,
   sanitizeContextValue,
   normalizeClientContext,
   buildContextualSystemPrompt,
@@ -13,7 +15,39 @@ import {
   checkRateLimit,
   MAX_CONTEXT_FIELD_LENGTH,
 } from "./index";
-import type { Env } from "./types";
+import type { Env, GeocodeResponse } from "./types";
+
+/** A representative OpenStreetMap Nominatim result entry. */
+const SAMPLE_NOMINATIM_ENTRY = {
+  display_name:
+    "White House, 1600, Pennsylvania Avenue NW, Washington, DC, 20500, United States",
+  lat: "38.8976998",
+  lon: "-77.0365534",
+  category: "office",
+  type: "government",
+  addresstype: "office",
+  osm_type: "way",
+  osm_id: 238241022,
+  boundingbox: ["38.8974", "38.8979", "-77.0368", "-77.0362"],
+  address: {
+    city: "Washington",
+    state: "District of Columbia",
+    postcode: "20500",
+    country: "United States",
+  },
+};
+
+/** Builds a fetch mock that resolves with the given JSON payload. */
+function mockGeocodeFetch(
+  jsonData: unknown,
+  { ok = true, status = 200 }: { ok?: boolean; status?: number } = {},
+) {
+  return vi.fn().mockResolvedValue({
+    ok,
+    status,
+    json: () => Promise.resolve(jsonData),
+  } as unknown as Response);
+}
 
 const SYSTEM_PROMPT =
   "You are a helpful, friendly assistant named daddy. If asked who you are or what your name is, respond exactly: \"hi I’m your daddy. I’m here to help you as your daddy. How can daddy help you\". If asked again, respond exactly: \"I’m here to be a daddy and to help you.\" Provide concise and accurate responses. For time-sensitive questions, clearly state what date or time context you are using and be transparent if you do not have live web access.";
@@ -949,106 +983,219 @@ describe("checkRateLimit", () => {
   });
 });
 
+describe("normalizeGeocodeEntry", () => {
+  it("maps a complete Nominatim entry to a GeocodeResult", () => {
+    const result = normalizeGeocodeEntry(SAMPLE_NOMINATIM_ENTRY);
+
+    expect(result).not.toBeNull();
+    expect(result?.displayName).toContain("White House");
+    expect(result?.latitude).toBeCloseTo(38.8976998);
+    expect(result?.longitude).toBeCloseTo(-77.0365534);
+    expect(result?.category).toBe("office");
+    expect(result?.type).toBe("government");
+    expect(result?.osmType).toBe("way");
+    expect(result?.osmId).toBe(238241022);
+    expect(result?.boundingBox).toEqual([
+      "38.8974",
+      "38.8979",
+      "-77.0368",
+      "-77.0362",
+    ]);
+    expect(result?.address?.city).toBe("Washington");
+    expect(result?.mapUrl).toContain("openstreetmap.org");
+    expect(result?.mapUrl).toContain("38.8976998");
+  });
+
+  it("returns null when coordinates are missing", () => {
+    expect(
+      normalizeGeocodeEntry({ display_name: "Somewhere" }),
+    ).toBeNull();
+  });
+
+  it("returns null when the display name is missing", () => {
+    expect(
+      normalizeGeocodeEntry({ lat: "1.0", lon: "2.0" }),
+    ).toBeNull();
+  });
+
+  it("returns null when coordinates are not numeric", () => {
+    expect(
+      normalizeGeocodeEntry({
+        display_name: "Bad",
+        lat: "not-a-number",
+        lon: "2.0",
+      }),
+    ).toBeNull();
+  });
+
+  it("omits optional fields that are absent or malformed", () => {
+    const result = normalizeGeocodeEntry({
+      display_name: "Minimal Place",
+      lat: 10,
+      lon: 20,
+      boundingbox: ["only", "two"],
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.category).toBeUndefined();
+    expect(result?.type).toBeUndefined();
+    expect(result?.boundingBox).toBeUndefined();
+    expect(result?.address).toBeUndefined();
+  });
+});
+
+describe("geocodeAddress", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests Nominatim with the query and returns normalized results", async () => {
+    const fetchMock = mockGeocodeFetch([SAMPLE_NOMINATIM_ENTRY]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await geocodeAddress("1600 Pennsylvania Ave");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [calledUrl, calledInit] = fetchMock.mock.calls[0];
+    expect(calledUrl).toContain("nominatim.openstreetmap.org");
+    expect(calledUrl).toContain("q=1600+Pennsylvania+Ave");
+    expect(calledUrl).toContain("format=jsonv2");
+    expect(calledInit.headers["User-Agent"]).toContain("daddy-dig");
+
+    expect(results).toHaveLength(1);
+    expect(results[0].displayName).toContain("White House");
+  });
+
+  it("filters out entries missing required fields", async () => {
+    const fetchMock = mockGeocodeFetch([
+      SAMPLE_NOMINATIM_ENTRY,
+      { display_name: "No coordinates" },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await geocodeAddress("somewhere");
+    expect(results).toHaveLength(1);
+  });
+
+  it("returns an empty array when the payload is not an array", async () => {
+    const fetchMock = mockGeocodeFetch({ error: "unexpected" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await geocodeAddress("somewhere");
+    expect(results).toEqual([]);
+  });
+
+  it("throws when the service returns a non-OK status", async () => {
+    const fetchMock = mockGeocodeFetch("", { ok: false, status: 503 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(geocodeAddress("somewhere")).rejects.toThrow("503");
+  });
+});
+
 describe("handleAddressLookup", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("returns 400 when address is missing", async () => {
+    const fetchMock = mockGeocodeFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
     const request = createAddressRequest({}, { "CF-Connecting-IP": "10.60.0.1" });
-    const { env, runMock } = createEnv();
+    const { env } = createEnv();
     const response = await handleAddressLookup(request, env);
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: "Invalid request: address must be a non-empty string",
     });
-    expect(runMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 when address is empty string", async () => {
+    const fetchMock = mockGeocodeFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
     const request = createAddressRequest({ address: "   " }, { "CF-Connecting-IP": "10.60.0.2" });
-    const { env, runMock } = createEnv();
+    const { env } = createEnv();
     const response = await handleAddressLookup(request, env);
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: "Invalid request: address must be a non-empty string",
     });
-    expect(runMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 when address is not a string", async () => {
+    const fetchMock = mockGeocodeFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
     const request = createAddressRequest({ address: 12345 }, { "CF-Connecting-IP": "10.60.0.3" });
-    const { env, runMock } = createEnv();
+    const { env } = createEnv();
     const response = await handleAddressLookup(request, env);
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: "Invalid request: address must be a non-empty string",
     });
-    expect(runMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 when address exceeds 500 characters", async () => {
+    const fetchMock = mockGeocodeFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
     const longAddress = "a".repeat(501);
     const request = createAddressRequest({ address: longAddress }, { "CF-Connecting-IP": "10.60.0.4" });
-    const { env, runMock } = createEnv();
+    const { env } = createEnv();
     const response = await handleAddressLookup(request, env);
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: "Address too long: maximum 500 characters allowed",
     });
-    expect(runMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("calls AI with address lookup system prompt and user address", async () => {
+  it("geocodes the address and returns verified results", async () => {
+    const fetchMock = mockGeocodeFetch([SAMPLE_NOMINATIM_ENTRY]);
+    vi.stubGlobal("fetch", fetchMock);
     const request = createAddressRequest(
       { address: "1600 Pennsylvania Ave, Washington DC" },
       { "CF-Connecting-IP": "10.50.0.1" },
     );
-
-    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
-    const env = {
-      AI: { run: runMock },
-      ASSETS: { fetch: vi.fn() },
-    } as unknown as Env;
+    const { env } = createEnv();
 
     const response = await handleAddressLookup(request, env);
 
-    expect(runMock).toHaveBeenCalledTimes(1);
-    const [, options] = runMock.mock.calls[0];
-
-    expect(options.messages[0].role).toBe("system");
-    expect(options.messages[0].content).toContain("address lookup assistant");
-    expect(options.messages[1].role).toBe("user");
-    expect(options.messages[1].content).toContain("1600 Pennsylvania Ave, Washington DC");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(200);
+
+    const body = (await response.json()) as GeocodeResponse;
+    expect(body.query).toBe("1600 Pennsylvania Ave, Washington DC");
+    expect(body.resultCount).toBe(1);
+    expect(body.results[0].displayName).toContain("White House");
+    expect(body.results[0].latitude).toBeCloseTo(38.8976998);
+    expect(body.attribution).toContain("OpenStreetMap");
   });
 
-  it("includes client context in system prompt when provided", async () => {
+  it("returns resultCount 0 when nothing matches", async () => {
+    const fetchMock = mockGeocodeFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
     const request = createAddressRequest(
-      {
-        address: "123 Main St",
-        clientContext: {
-          timeZone: "America/Chicago",
-          locale: "en-US",
-        },
-      },
-      { "CF-Connecting-IP": "10.50.0.2" },
+      { address: "asdkjfhaskjdfh nowhere" },
+      { "CF-Connecting-IP": "10.50.0.9" },
     );
+    const { env } = createEnv();
 
-    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
-    const env = {
-      AI: { run: runMock },
-      ASSETS: { fetch: vi.fn() },
-    } as unknown as Env;
-
-    await handleAddressLookup(request, env);
-
-    const [, options] = runMock.mock.calls[0];
-    expect(options.messages[0].content).toContain("America/Chicago");
-    expect(options.messages[0].content).toContain("en-US");
+    const response = await handleAddressLookup(request, env);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as GeocodeResponse;
+    expect(body.resultCount).toBe(0);
+    expect(body.results).toEqual([]);
   });
 
   it("returns 415 when Content-Type is not application/json", async () => {
+    const fetchMock = mockGeocodeFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
     const request = new Request("https://example.com/api/address-lookup", {
       method: "POST",
       headers: {
@@ -1058,14 +1205,16 @@ describe("handleAddressLookup", () => {
       body: JSON.stringify({ address: "123 Main St" }),
     });
 
-    const { env, runMock } = createEnv();
+    const { env } = createEnv();
     const response = await handleAddressLookup(request, env);
 
     expect(response.status).toBe(415);
-    expect(runMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 for invalid JSON body", async () => {
+    const fetchMock = mockGeocodeFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
     const request = new Request("https://example.com/api/address-lookup", {
       method: "POST",
       headers: {
@@ -1075,38 +1224,57 @@ describe("handleAddressLookup", () => {
       body: "not json",
     });
 
-    const { env, runMock } = createEnv();
+    const { env } = createEnv();
     const response = await handleAddressLookup(request, env);
 
     expect(response.status).toBe(400);
-    expect(runMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("handles AI service errors gracefully", async () => {
+  it("returns 502 when the geocoding service is unavailable", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
     const request = createAddressRequest(
       { address: "123 Main St" },
       { "CF-Connecting-IP": "10.50.0.5" },
     );
 
-    const runMock = vi.fn().mockRejectedValue(new Error("AI service error"));
-    const env = {
-      AI: { run: runMock },
-      ASSETS: { fetch: vi.fn() },
-    } as unknown as Env;
-
+    const { env } = createEnv();
     const response = await handleAddressLookup(request, env);
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(502);
     expect(await response.json()).toEqual({
-      error: "Failed to process address lookup",
+      error:
+        "Address lookup service is temporarily unavailable. Please try again.",
+    });
+  });
+
+  it("returns 504 when the geocoding request times out", async () => {
+    const abortError = new Error("The operation was aborted");
+    abortError.name = "AbortError";
+    const fetchMock = vi.fn().mockRejectedValue(abortError);
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createAddressRequest(
+      { address: "123 Main St" },
+      { "CF-Connecting-IP": "10.50.0.6" },
+    );
+
+    const { env } = createEnv();
+    const response = await handleAddressLookup(request, env);
+
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({
+      error: "Address lookup timed out. Please try again.",
     });
   });
 
   it("returns 429 when rate limit is exceeded", async () => {
+    const fetchMock = mockGeocodeFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
     const clientIp = "192.168.99.99";
 
     const env = {
-      AI: { run: vi.fn().mockResolvedValue(new Response("ok")) },
+      AI: { run: vi.fn() },
       ASSETS: { fetch: vi.fn() },
       RATE_LIMIT_REQUESTS: "1",
       RATE_LIMIT_WINDOW_MS: "60000",
@@ -1131,14 +1299,11 @@ describe("handleAddressLookup", () => {
   });
 
   it("applies security headers to responses", async () => {
+    const fetchMock = mockGeocodeFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
     const request = createAddressRequest({ address: "123 Main St" });
 
-    const runMock = vi.fn().mockResolvedValue(new Response("ok"));
-    const env = {
-      AI: { run: runMock },
-      ASSETS: { fetch: vi.fn() },
-    } as unknown as Env;
-
+    const { env } = createEnv();
     const response = await handleAddressLookup(request, env);
 
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");

@@ -7,7 +7,13 @@
  *
  * @license MIT
  */
-import { Env, ChatMessage, ClientContext } from "./types";
+import {
+  Env,
+  ChatMessage,
+  ClientContext,
+  GeocodeResult,
+  GeocodeResponse,
+} from "./types";
 
 // Default configuration values (can be overridden via environment variables)
 const DEFAULT_MODEL_ID = "@cf/meta/llama-3.1-8b-instruct-fast";
@@ -16,7 +22,6 @@ const DEFAULT_SYSTEM_PROMPT =
 const DEFAULT_MAX_MESSAGE_LENGTH = 10000;
 const DEFAULT_MAX_MESSAGES = 100;
 const DEFAULT_MAX_TOKENS = 512;
-const DEFAULT_ADDRESS_LOOKUP_MAX_TOKENS = 1024;
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const DEFAULT_RATE_LIMIT_REQUESTS = 20; // 20 requests
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000; // per 60 seconds
@@ -555,19 +560,156 @@ export async function handleChatRequest(
   }
 }
 
-const ADDRESS_LOOKUP_SYSTEM_PROMPT =
-  "You are an address lookup assistant. When given an address, provide useful information about it. " +
-  "Include details such as: the general area or neighborhood, the city/state/country, postal code if known, " +
-  "and any notable landmarks or points of interest nearby. " +
-  "If the address appears incomplete or ambiguous, mention that and provide your best interpretation. " +
-  "Keep your response concise and well-structured. " +
-  "If the input does not appear to be a valid address, politely indicate that and ask for clarification.";
+// ── Address geocoding (real lookups via OpenStreetMap Nominatim) ──────────
+//
+// The original address lookup asked the language model to "look up" an
+// address. Language models have no live data, so those answers were guesses:
+// invented neighborhoods, postal codes, and landmarks presented as fact. This
+// implementation performs a real geocode against the OpenStreetMap Nominatim
+// service and returns verifiable coordinates and address components — a
+// solution that actually works.
+
+const NOMINATIM_ENDPOINT = "https://nominatim.openstreetmap.org/search";
+// Nominatim's usage policy requires an identifying User-Agent.
+const GEOCODE_USER_AGENT =
+  "daddy-dig-address-lookup/1.0 (+https://github.com/drewc611/daddy-dig)";
+const GEOCODE_TIMEOUT_MS = 10_000;
+const MAX_GEOCODE_RESULTS = 5;
+const MAX_ADDRESS_LENGTH = 500;
+const GEOCODE_ATTRIBUTION = "Data © OpenStreetMap contributors (via Nominatim)";
+
+/** Raw shape of a Nominatim result entry (all fields untrusted). */
+interface NominatimEntry {
+  display_name?: unknown;
+  lat?: unknown;
+  lon?: unknown;
+  category?: unknown;
+  type?: unknown;
+  addresstype?: unknown;
+  osm_type?: unknown;
+  osm_id?: unknown;
+  boundingbox?: unknown;
+  address?: unknown;
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function buildMapUrl(latitude: number, longitude: number): string {
+  const zoom = 16;
+  return (
+    `https://www.openstreetmap.org/?mlat=${latitude}&mlon=${longitude}` +
+    `#map=${zoom}/${latitude}/${longitude}`
+  );
+}
 
 /**
- * Handles address lookup API requests
+ * Converts a raw Nominatim entry into a validated GeocodeResult.
  *
- * Accepts an address string, sends it to the AI model for lookup information,
- * and returns a streaming response.
+ * Returns null when the entry is missing the coordinates or display name that
+ * make a result meaningful, so callers can safely filter incomplete matches.
+ */
+export function normalizeGeocodeEntry(entry: NominatimEntry): GeocodeResult | null {
+  const latitude = toFiniteNumber(entry.lat);
+  const longitude = toFiniteNumber(entry.lon);
+  const displayName =
+    typeof entry.display_name === "string" ? entry.display_name.trim() : "";
+
+  if (latitude === undefined || longitude === undefined || !displayName) {
+    return null;
+  }
+
+  const address: Record<string, string> = {};
+  if (entry.address && typeof entry.address === "object") {
+    for (const [key, value] of Object.entries(
+      entry.address as Record<string, unknown>,
+    )) {
+      if (typeof value === "string") {
+        address[key] = value;
+      }
+    }
+  }
+
+  const boundingBox = Array.isArray(entry.boundingbox)
+    ? entry.boundingbox.filter((v): v is string => typeof v === "string")
+    : [];
+
+  return {
+    displayName,
+    latitude,
+    longitude,
+    category: typeof entry.category === "string" ? entry.category : undefined,
+    type: typeof entry.type === "string" ? entry.type : undefined,
+    addressType:
+      typeof entry.addresstype === "string" ? entry.addresstype : undefined,
+    osmType: typeof entry.osm_type === "string" ? entry.osm_type : undefined,
+    osmId: toFiniteNumber(entry.osm_id),
+    boundingBox:
+      boundingBox.length === 4
+        ? (boundingBox as [string, string, string, string])
+        : undefined,
+    address: Object.keys(address).length > 0 ? address : undefined,
+    mapUrl: buildMapUrl(latitude, longitude),
+  };
+}
+
+/**
+ * Geocodes an address query against OpenStreetMap Nominatim.
+ *
+ * @param query - The free-form address to resolve
+ * @param options - Optional AbortSignal for timeout handling
+ * @returns Validated, best-first matches (empty array when nothing matched)
+ * @throws When the geocoding service is unreachable or returns an error status
+ */
+export async function geocodeAddress(
+  query: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<GeocodeResult[]> {
+  const url = new URL(NOMINATIM_ENDPOINT);
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("addressdetails", "1");
+  url.searchParams.set("limit", String(MAX_GEOCODE_RESULTS));
+  url.searchParams.set("q", query);
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "User-Agent": GEOCODE_USER_AGENT,
+    },
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Geocoding service returned status ${response.status}`);
+  }
+
+  const data: unknown = await response.json();
+  if (!Array.isArray(data)) {
+    return [];
+  }
+
+  return data
+    .map((entry) => normalizeGeocodeEntry(entry as NominatimEntry))
+    .filter((result): result is GeocodeResult => result !== null);
+}
+
+/**
+ * Handles address lookup API requests.
+ *
+ * Accepts an address string and returns real geocoding results from
+ * OpenStreetMap Nominatim as JSON — verifiable coordinates and address
+ * components rather than model-generated guesses.
  *
  * Request body format:
  * ```json
@@ -576,20 +718,36 @@ const ADDRESS_LOOKUP_SYSTEM_PROMPT =
  * }
  * ```
  *
+ * Response body ({@link GeocodeResponse}):
+ * ```json
+ * {
+ *   "query": "123 Main St, Springfield, IL",
+ *   "resultCount": 1,
+ *   "results": [ { "displayName": "...", "latitude": 0, "longitude": 0, ... } ],
+ *   "attribution": "Data © OpenStreetMap contributors (via Nominatim)"
+ * }
+ * ```
+ *
+ * Error responses:
+ * - 400: Invalid request (missing/too-long address, bad JSON)
+ * - 413: Request body too large
+ * - 415: Unsupported Media Type
+ * - 429: Rate limit exceeded
+ * - 502: Geocoding service unavailable
+ * - 504: Geocoding service timed out
+ *
  * @param request - The incoming HTTP request
  * @param env - Environment bindings and configuration
- * @returns Response object (streaming or error)
+ * @returns Response object (JSON results or error)
  */
 export async function handleAddressLookup(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  const MODEL_ID = env.MODEL_ID || DEFAULT_MODEL_ID;
   const MAX_BODY_BYTES = parsePositiveInt(
     env.MAX_BODY_BYTES,
     DEFAULT_MAX_BODY_BYTES,
   );
-  const MAX_TOKENS = parsePositiveInt(env.MAX_TOKENS, DEFAULT_ADDRESS_LOOKUP_MAX_TOKENS);
   const RATE_LIMIT_REQUESTS = parsePositiveInt(
     env.RATE_LIMIT_REQUESTS,
     DEFAULT_RATE_LIMIT_REQUESTS,
@@ -624,99 +782,109 @@ export async function handleAddressLookup(
     );
   }
 
-  try {
-    const contentType = request.headers.get("content-type") || "";
-    if (!contentType.includes("application/json")) {
-      return applySecurityHeaders(
-        new Response(
-          JSON.stringify({ error: "Content-Type must be application/json" }),
-          { status: 415, headers: JSON_HEADERS },
-        ),
-        { cacheControl: "no-store" },
-      );
-    }
-
-    const contentLength = request.headers.get("content-length");
-    if (contentLength && Number.parseInt(contentLength, 10) > MAX_BODY_BYTES) {
-      return applySecurityHeaders(
-        new Response(
-          JSON.stringify({
-            error: `Request body too large: maximum ${MAX_BODY_BYTES} bytes allowed`,
-          }),
-          { status: 413, headers: JSON_HEADERS },
-        ),
-        { cacheControl: "no-store" },
-      );
-    }
-
-    const parsedBody = await parseJsonBodyWithLimit(request, MAX_BODY_BYTES);
-    if ("error" in parsedBody) {
-      return applySecurityHeaders(parsedBody.error, { cacheControl: "no-store" });
-    }
-
-    const { address, clientContext } = (parsedBody.data ?? {}) as {
-      address?: unknown;
-      clientContext?: unknown;
-    };
-
-    if (typeof address !== "string" || !address.trim()) {
-      return applySecurityHeaders(
-        new Response(
-          JSON.stringify({
-            error: "Invalid request: address must be a non-empty string",
-          }),
-          { status: 400, headers: JSON_HEADERS },
-        ),
-        { cacheControl: "no-store" },
-      );
-    }
-
-    const MAX_ADDRESS_LENGTH = 500;
-    if (address.length > MAX_ADDRESS_LENGTH) {
-      return applySecurityHeaders(
-        new Response(
-          JSON.stringify({
-            error: `Address too long: maximum ${MAX_ADDRESS_LENGTH} characters allowed`,
-          }),
-          { status: 400, headers: JSON_HEADERS },
-        ),
-        { cacheControl: "no-store" },
-      );
-    }
-
-    const normalizedClientContext = normalizeClientContext(clientContext);
-    const contextualSystemPrompt = buildContextualSystemPrompt(
-      ADDRESS_LOOKUP_SYSTEM_PROMPT,
-      normalizedClientContext,
-    );
-
-    const messages = [
-      { role: "system" as const, content: contextualSystemPrompt },
-      { role: "user" as const, content: `Look up the following address and provide information about it:\n\n${address.trim()}` },
-    ];
-
-    const modelToUse = (env.MODEL_ID || DEFAULT_MODEL_ID) as keyof AiModels;
-
-    const response = await env.AI.run(
-      modelToUse,
-      {
-        messages,
-        max_tokens: MAX_TOKENS,
-      },
-      {
-        returnRawResponse: true,
-      },
-    );
-
-    return applySecurityHeaders(response, { cacheControl: "no-store" });
-  } catch (error) {
-    console.error("Error processing address lookup:", error);
+  const contentType = request.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
     return applySecurityHeaders(
       new Response(
-        JSON.stringify({ error: "Failed to process address lookup" }),
-        { status: 500, headers: JSON_HEADERS },
+        JSON.stringify({ error: "Content-Type must be application/json" }),
+        { status: 415, headers: JSON_HEADERS },
       ),
       { cacheControl: "no-store" },
     );
+  }
+
+  const contentLength = request.headers.get("content-length");
+  if (contentLength && Number.parseInt(contentLength, 10) > MAX_BODY_BYTES) {
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({
+          error: `Request body too large: maximum ${MAX_BODY_BYTES} bytes allowed`,
+        }),
+        { status: 413, headers: JSON_HEADERS },
+      ),
+      { cacheControl: "no-store" },
+    );
+  }
+
+  const parsedBody = await parseJsonBodyWithLimit(request, MAX_BODY_BYTES);
+  if ("error" in parsedBody) {
+    return applySecurityHeaders(parsedBody.error, { cacheControl: "no-store" });
+  }
+
+  const { address } = (parsedBody.data ?? {}) as { address?: unknown };
+
+  if (typeof address !== "string" || !address.trim()) {
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({
+          error: "Invalid request: address must be a non-empty string",
+        }),
+        { status: 400, headers: JSON_HEADERS },
+      ),
+      { cacheControl: "no-store" },
+    );
+  }
+
+  if (address.length > MAX_ADDRESS_LENGTH) {
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({
+          error: `Address too long: maximum ${MAX_ADDRESS_LENGTH} characters allowed`,
+        }),
+        { status: 400, headers: JSON_HEADERS },
+      ),
+      { cacheControl: "no-store" },
+    );
+  }
+
+  const trimmedAddress = address.trim();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GEOCODE_TIMEOUT_MS);
+
+  try {
+    const results = await geocodeAddress(trimmedAddress, {
+      signal: controller.signal,
+    });
+
+    const payload: GeocodeResponse = {
+      query: trimmedAddress,
+      resultCount: results.length,
+      results,
+      attribution: GEOCODE_ATTRIBUTION,
+    };
+
+    return applySecurityHeaders(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: JSON_HEADERS,
+      }),
+      { cacheControl: "no-store" },
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return applySecurityHeaders(
+        new Response(
+          JSON.stringify({
+            error: "Address lookup timed out. Please try again.",
+          }),
+          { status: 504, headers: JSON_HEADERS },
+        ),
+        { cacheControl: "no-store" },
+      );
+    }
+
+    console.error("Error processing address lookup:", error);
+    return applySecurityHeaders(
+      new Response(
+        JSON.stringify({
+          error:
+            "Address lookup service is temporarily unavailable. Please try again.",
+        }),
+        { status: 502, headers: JSON_HEADERS },
+      ),
+      { cacheControl: "no-store" },
+    );
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

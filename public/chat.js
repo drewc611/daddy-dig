@@ -435,18 +435,17 @@ async function performAddressLookup() {
   if (!address || isLookingUp) return;
 
   if (address.length > 500) {
-    lookupResults.textContent =
-      "Address is too long. Please keep it under 500 characters.";
-    lookupResults.classList.add("visible", "error");
+    showLookupStatus(
+      "Address is too long. Please keep it under 500 characters.",
+      true,
+    );
     return;
   }
 
   isLookingUp = true;
   lookupButton.disabled = true;
   addressInput.disabled = true;
-  lookupResults.textContent = "";
-  lookupResults.classList.remove("error");
-  lookupResults.classList.add("visible");
+  showLookupStatus("Searching OpenStreetMap…", false);
 
   const abortController = new AbortController();
   const timeoutId = setTimeout(() => abortController.abort(), REQUEST_TIMEOUT);
@@ -455,10 +454,7 @@ async function performAddressLookup() {
     const response = await fetch("/api/address-lookup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        address,
-        clientContext: getClientContext(),
-      }),
+      body: JSON.stringify({ address }),
       signal: abortController.signal,
     });
 
@@ -469,59 +465,8 @@ async function performAddressLookup() {
       throw new Error(errorData.error || `Server error: ${response.status}`);
     }
 
-    if (!response.body) {
-      throw new Error("Streaming response unavailable");
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let resultText = "";
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      buffer += chunk;
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (trimmedLine === "") continue;
-
-        try {
-          const jsonData = JSON.parse(trimmedLine);
-          if (jsonData.response) {
-            resultText += jsonData.response;
-            lookupResults.textContent = resultText;
-          }
-        } catch (e) {
-          if (trimmedLine) {
-            console.error("Error parsing address lookup JSON:", trimmedLine, e);
-          }
-        }
-      }
-    }
-
-    // Process remaining buffer
-    if (buffer.trim()) {
-      try {
-        const jsonData = JSON.parse(buffer.trim());
-        if (jsonData.response) {
-          resultText += jsonData.response;
-          lookupResults.textContent = resultText;
-        }
-      } catch (e) {
-        console.error("Error parsing final address lookup buffer:", buffer, e);
-      }
-    }
-
-    if (!resultText) {
-      throw new Error("No response received from server");
-    }
+    const data = await response.json();
+    renderLookupResults(data);
   } catch (error) {
     clearTimeout(timeoutId);
     console.error("Address lookup error:", error);
@@ -533,12 +478,127 @@ async function performAddressLookup() {
       errorMessage = `Error: ${error.message}`;
     }
 
-    lookupResults.textContent = errorMessage;
-    lookupResults.classList.add("error");
+    showLookupStatus(errorMessage, true);
   } finally {
     isLookingUp = false;
     lookupButton.disabled = false;
     addressInput.disabled = false;
     addressInput.focus();
   }
+}
+
+/**
+ * Displays a single status/error line in the lookup results area.
+ */
+function showLookupStatus(message, isError) {
+  lookupResults.replaceChildren();
+  const statusEl = document.createElement("div");
+  statusEl.className = isError ? "lookup-status error" : "lookup-status";
+  statusEl.textContent = message;
+  lookupResults.appendChild(statusEl);
+  lookupResults.classList.add("visible");
+}
+
+/**
+ * Renders verified geocoding results returned by the address lookup API.
+ * All external text is inserted via textContent to prevent HTML injection.
+ */
+function renderLookupResults(data) {
+  lookupResults.replaceChildren();
+  lookupResults.classList.add("visible");
+
+  const results = Array.isArray(data.results) ? data.results : [];
+
+  if (results.length === 0) {
+    const query = typeof data.query === "string" ? data.query : "that address";
+    showLookupStatus(
+      `No matching location found for “${query}”. Try adding a city, ` +
+        `postal code, or country.`,
+      false,
+    );
+    return;
+  }
+
+  for (const result of results) {
+    lookupResults.appendChild(createResultCard(result));
+  }
+
+  if (typeof data.attribution === "string" && data.attribution) {
+    const attribution = document.createElement("p");
+    attribution.className = "lookup-attribution";
+    attribution.textContent = data.attribution;
+    lookupResults.appendChild(attribution);
+  }
+}
+
+function createResultCard(result) {
+  const card = document.createElement("div");
+  card.className = "lookup-result";
+
+  const name = document.createElement("p");
+  name.className = "lookup-result-name";
+  name.textContent = result.displayName || "Unnamed location";
+  card.appendChild(name);
+
+  const dl = document.createElement("dl");
+
+  const hasCoords =
+    typeof result.latitude === "number" &&
+    typeof result.longitude === "number";
+  if (hasCoords) {
+    appendDetail(
+      dl,
+      "Coordinates",
+      `${result.latitude.toFixed(6)}, ${result.longitude.toFixed(6)}`,
+    );
+  }
+
+  const classification = [result.category, result.type]
+    .filter(Boolean)
+    .join(" · ");
+  if (classification) {
+    appendDetail(dl, "Type", classification);
+  }
+
+  if (result.address && typeof result.address === "object") {
+    const locality = [
+      result.address.city ||
+        result.address.town ||
+        result.address.village ||
+        result.address.hamlet,
+      result.address.state,
+      result.address.postcode,
+      result.address.country,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    if (locality) {
+      appendDetail(dl, "Area", locality);
+    }
+  }
+
+  if (dl.childElementCount > 0) {
+    card.appendChild(dl);
+  }
+
+  if (typeof result.mapUrl === "string" && result.mapUrl) {
+    const link = document.createElement("a");
+    link.className = "lookup-map-link";
+    link.href = result.mapUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "View on OpenStreetMap ↗";
+    card.appendChild(link);
+  }
+
+  return card;
+}
+
+function appendDetail(dl, label, value) {
+  const dt = document.createElement("dt");
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  dd.textContent = value;
+  dl.appendChild(dt);
+  dl.appendChild(dd);
 }
