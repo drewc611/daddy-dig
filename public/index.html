@@ -35,15 +35,52 @@
         color: var(--text-color);
         min-height: 100vh;
         background:
-          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1440 320' preserveAspectRatio='none'%3E%3Cpath fill='%236d28d9' fill-opacity='0.12' d='M0,160L60,170.7C120,181,240,203,360,186.7C480,171,600,117,720,112C840,107,960,149,1080,176C1200,203,1320,213,1380,218.7L1440,224L1440,320L1380,320C1320,320,1200,320,1080,320C960,320,840,320,720,320C600,320,480,320,360,320C240,320,120,320,60,320L0,320Z'/%3E%3C/svg%3E")
-            bottom center / 100% 240px no-repeat,
           radial-gradient(circle at top left, rgba(109, 40, 217, 0.12), transparent 45%),
           radial-gradient(circle at top right, rgba(34, 211, 238, 0.18), transparent 40%),
           #f8fafc;
         padding: 2rem 1.5rem 3rem;
+        overflow-x: hidden;
+      }
+
+      .wave-bg {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 280px;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+      }
+
+      .wave-bg svg {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 200%;
+        height: 100%;
+      }
+
+      .wave-bg .wave-back {
+        animation: wave-drift 12s linear infinite;
+      }
+
+      .wave-bg .wave-mid {
+        animation: wave-drift 8s linear infinite reverse;
+      }
+
+      .wave-bg .wave-front {
+        animation: wave-drift 10s linear infinite;
+      }
+
+      @keyframes wave-drift {
+        from { transform: translateX(0); }
+        to { transform: translateX(-50%); }
       }
 
       .page {
+        position: relative;
+        z-index: 1;
         max-width: 960px;
         margin: 0 auto;
         display: flex;
@@ -537,6 +574,17 @@
     </style>
   </head>
   <body>
+    <div class="wave-bg" aria-hidden="true">
+      <svg class="wave-back" viewBox="0 0 2880 320" preserveAspectRatio="none">
+        <path fill="rgba(109,40,217,0.10)" d="M0,192L120,186.7C240,181,480,171,720,176C960,181,1200,203,1440,192C1680,181,1920,139,2160,133.3C2400,128,2640,160,2760,176L2880,192L2880,320L2760,320C2640,320,2400,320,2160,320C1920,320,1680,320,1440,320C1200,320,960,320,720,320C480,320,240,320,120,320L0,320Z"/>
+      </svg>
+      <svg class="wave-mid" viewBox="0 0 2880 320" preserveAspectRatio="none">
+        <path fill="rgba(34,211,238,0.12)" d="M0,224L120,213.3C240,203,480,181,720,186.7C960,192,1200,224,1440,229.3C1680,235,1920,213,2160,197.3C2400,181,2640,171,2760,165.3L2880,160L2880,320L2760,320C2640,320,2400,320,2160,320C1920,320,1680,320,1440,320C1200,320,960,320,720,320C480,320,240,320,120,320L0,320Z"/>
+      </svg>
+      <svg class="wave-front" viewBox="0 0 2880 320" preserveAspectRatio="none">
+        <path fill="rgba(109,40,217,0.07)" d="M0,256L120,245.3C240,235,480,213,720,208C960,203,1200,213,1440,224C1680,235,1920,245,2160,240C2400,235,2640,219,2760,210.7L2880,203L2880,320L2760,320C2640,320,2400,320,2160,320C1920,320,1680,320,1440,320C1200,320,960,320,720,320C480,320,240,320,120,320L0,320Z"/>
+      </svg>
+    </div>
     <div class="page">
       <header>
         <h1>test LLM</h1>
