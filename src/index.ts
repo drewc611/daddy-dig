@@ -22,8 +22,10 @@ const DEFAULT_RATE_LIMIT_REQUESTS = 20; // 20 requests
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000; // per 60 seconds
 export const MAX_CONTEXT_FIELD_LENGTH = 300;
 
-// Simple in-memory rate limiter (resets on Worker restart)
-// For production, consider using Durable Objects or Rate Limiting API
+// In-memory rate limiter. It is per isolate, so the effective limit is N per
+// isolate and it resets when the isolate is evicted. It is best-effort only.
+// When a Workers Rate Limiting binding named RATE_LIMITER is configured (see
+// README), isRateLimited() checks it first and uses this map as the fallback.
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 
 export default {
@@ -293,7 +295,7 @@ export function isChatMessage(value: unknown): value is ChatMessage {
  * Check rate limit for a given identifier (e.g., IP address)
  *
  * Uses a simple in-memory sliding window algorithm. Resets on Worker restart.
- * For production use, consider Cloudflare's Rate Limiting API or Durable Objects.
+ * Per isolate and best-effort; see isRateLimited() for the binding-backed path.
  *
  * @param identifier - Unique identifier (typically IP address)
  * @param maxRequests - Maximum number of requests allowed in the window
@@ -331,6 +333,42 @@ export function checkRateLimit(
   // Increment count
   record.count++;
   return false;
+}
+
+/**
+ * Returns the client IP as set by Cloudflare's edge.
+ *
+ * Only CF-Connecting-IP is trusted. X-Forwarded-For is client-controlled when
+ * the Worker is reached off-platform, so it is never used as a rate limit key.
+ * Requests without the header share one "unknown" bucket, which keeps the
+ * limiter fail-closed for them.
+ */
+export function getClientIp(request: Request): string {
+  return request.headers.get("CF-Connecting-IP")?.trim() || "unknown";
+}
+
+/**
+ * Applies the rate limit for a client. Uses the RATE_LIMITER binding when it
+ * is configured and falls back to the in-memory limiter when it is not, or
+ * when the binding call fails.
+ *
+ * @returns True if the client is over the limit, false otherwise
+ */
+export async function isRateLimited(
+  env: Env,
+  clientIp: string,
+  maxRequests: number,
+  windowMs: number,
+): Promise<boolean> {
+  if (env.RATE_LIMITER) {
+    try {
+      const outcome = await env.RATE_LIMITER.limit({ key: clientIp });
+      return !outcome.success;
+    } catch (error) {
+      console.error("Rate limiter binding failed, using in-memory limiter:", error);
+    }
+  }
+  return checkRateLimit(clientIp, maxRequests, windowMs);
 }
 
 /**
@@ -385,15 +423,9 @@ export async function handleChatRequest(
     DEFAULT_RATE_LIMIT_WINDOW_MS,
   );
 
-  // Check rate limit using IP address or CF-Connecting-IP header
-  const forwardedFor = request.headers.get("X-Forwarded-For") || "";
-  const forwardedIp = forwardedFor.split(",")[0]?.trim();
-  const clientIp =
-    request.headers.get("CF-Connecting-IP") ||
-    forwardedIp ||
-    "unknown";
+  const clientIp = getClientIp(request);
 
-  if (checkRateLimit(clientIp, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS)) {
+  if (await isRateLimited(env, clientIp, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS)) {
     return applySecurityHeaders(
       new Response(
         JSON.stringify({
@@ -511,18 +543,17 @@ export async function handleChatRequest(
       normalizedClientContext,
     );
 
-    const normalizedMessages = messages.map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
-
-    // Add system prompt if not present
-    if (!normalizedMessages.some((msg) => msg.role === "system")) {
-      normalizedMessages.unshift({
-        role: "system",
-        content: contextualSystemPrompt,
-      });
-    }
+    // Clients may not supply system messages: drop them and always lead with
+    // the server-side prompt so its persona and guardrails cannot be replaced.
+    const normalizedMessages = [
+      { role: "system" as ChatMessage["role"], content: contextualSystemPrompt },
+      ...messages
+        .filter((message) => message.role !== "system")
+        .map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+    ];
 
     const response = await env.AI.run(
       modelToUse,
@@ -599,14 +630,9 @@ export async function handleAddressLookup(
     DEFAULT_RATE_LIMIT_WINDOW_MS,
   );
 
-  const forwardedFor = request.headers.get("X-Forwarded-For") || "";
-  const forwardedIp = forwardedFor.split(",")[0]?.trim();
-  const clientIp =
-    request.headers.get("CF-Connecting-IP") ||
-    forwardedIp ||
-    "unknown";
+  const clientIp = getClientIp(request);
 
-  if (checkRateLimit(clientIp, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS)) {
+  if (await isRateLimited(env, clientIp, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS)) {
     return applySecurityHeaders(
       new Response(
         JSON.stringify({
