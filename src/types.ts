@@ -14,6 +14,12 @@ export interface Env {
   ASSETS: { fetch: (request: Request) => Promise<Response> };
 
   /**
+   * Optional Workers Rate Limiting binding. When absent the in-memory
+   * per-isolate limiter is used. See README for how to configure it.
+   */
+  RATE_LIMITER?: RateLimit;
+
+  /**
    * Configuration variables
    */
   MODEL_ID?: string;

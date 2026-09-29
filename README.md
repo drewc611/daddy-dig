@@ -173,7 +173,27 @@ Learn more about [AI Gateway](https://developers.cloudflare.com/ai-gateway/).
 
 ### Modifying the System Prompt
 
-The default system prompt can be changed by updating the `SYSTEM_PROMPT` constant in `src/index.ts`.
+The default system prompt can be changed by updating the `SYSTEM_PROMPT` constant in `src/index.ts`. The server always prepends it; `system` messages sent by clients are dropped.
+
+### Rate Limiting
+
+`/api/chat` and `/api/address-lookup` are limited per client IP, using only the `CF-Connecting-IP` header that Cloudflare's edge sets. `X-Forwarded-For` is ignored because a client can set it. Requests without `CF-Connecting-IP` (for example local dev) share one bucket.
+
+By default the limit is an in-memory counter (`RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW_MS`). It is per isolate and resets when the isolate is evicted, so treat it as best-effort protection against casual abuse, not a hard cost cap.
+
+For a stronger limit, add a [Workers Rate Limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) named `RATE_LIMITER` to `wrangler.jsonc`. The Worker uses it automatically when present and falls back to the in-memory counter if it is absent or errors:
+
+```jsonc
+"ratelimits": [
+  {
+    "name": "RATE_LIMITER",
+    "namespace_id": "<a positive integer unused in your Cloudflare account>",
+    "simple": { "limit": 20, "period": 60 }
+  }
+]
+```
+
+`namespace_id` must be unique within your account, so it is not set in this repository. `period` must be 10 or 60. Cloudflare counts per location, so the limit is per location rather than global. A global cap needs a Durable Object counter, which this project does not include. To cap Workers AI spend, also set a usage limit or alert on the Cloudflare account.
 
 ### Styling
 
